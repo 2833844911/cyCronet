@@ -1,5 +1,7 @@
 # Cycronet - 绕过 TLS/HTTP2 指纹检测的 Python HTTP 客户端
 
+[English](README_EN.md) | 简体中文
+
 ## 🎯 核心功能
 
 Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大的特点是能够产生真实的 Chrome 浏览器 TLS/HTTP2 指纹**，从而绕过各种反爬虫和指纹检测系统。
