@@ -732,7 +732,7 @@ asyncio.run(main())
 ## 📚 Related Resources
 
 - **TLS Fingerprint Detection Tool**: https://tls.peet.ws/
-- **TLS Fingerprint Detection Site**: https://tls.tsvmp.com:38080/
+- **TLS Fingerprint Detection Site**: https://tls.tsvmp.com:38080/  use tls_verify.py try
 - **HTTP/2 Fingerprint Detection**: https://http2.pro/
 - **Cloudflare Detection Test**: https://check.torproject.org/
 
