@@ -748,8 +748,9 @@ asyncio.run(main())
 ## 📚 相关资源
 
 - **TLS 指纹检测工具**：https://tls.peet.ws/
-- **TLS 指纹检测站**：https://tls.tsvmp.com:38080/
+- **TLS 指纹检测站**：https://tls.tsvmp.com:38080/ 使用tls_verify.py检测
 - **HTTP/2 指纹检测**：https://http2.pro/
 - **Cloudflare 检测测试**：https://check.torproject.org/
 
 **Cycronet - 真实的 Chrome 指纹，绕过一切检测！** 🚀
+
