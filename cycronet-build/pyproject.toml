@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cycronet"
-version = "144.0.27"
+version = "144.1.0"
 description = "Python bindings for Cronet-Cloak - Authentic Chrome TLS/HTTP2 fingerprints with async support"
 readme = "README.md"
 requires-python = ">=3.7"

@@ -106,6 +106,14 @@
       "TLS_RSA_WITH_AES_128_CBC_SHA",
       "TLS_RSA_WITH_AES_256_CBC_SHA"
     ],
+    "tls_curves": [
+      "X25519MLKEM768",
+      "X25519",
+      "P-256",
+      "P-384"
+    ],
+    "tls_extensions": [
+    ],
     "hex_codes": [
 
     ]

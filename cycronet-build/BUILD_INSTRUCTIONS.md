@@ -9,9 +9,17 @@ cycronet-build/
 ├── src/                    # Rust 源代码
 ├── python/                 # Python 包源代码
 │   └── cycronet/
-│       ├── __init__.py
-│       ├── __init__.pyi
-│       └── tls_profiles.json
+│       ├── __init__.py              # 81 行 - 主入口，导出公共 API
+│       ├── _native_loader.py        # 原生库加载逻辑
+│       ├── _utils.py                # 工具函数（header 排序、domain 匹配等）
+│       ├── _types.py                # 类型定义
+│       ├── _cookies.py              # Cookie 和 CookieJar 类
+│       ├── _response.py             # Response 和异常类
+│       ├── _session.py              # 同步 Session 类
+│       ├── _async_session.py        # 异步 AsyncSession 类
+│       ├── _client.py               # CronetClient 和 AsyncCronetClient 工厂函数（含 TLS 配置缓存优化）
+│       ├── _api_sync.py             # 同步模块级函数
+│       └── _api_async.py            # 异步模块级函数
 ├── proto/                  # Protocol Buffers 定义
 ├── linux_deps/             # Linux NSS 依赖库
 ├── cronet-libs/            # Cronet 原生库文件
