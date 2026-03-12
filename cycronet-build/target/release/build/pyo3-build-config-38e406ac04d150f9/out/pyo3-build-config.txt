@@ -1,0 +1,10 @@
+implementation=CPython
+version=3.8
+shared=false
+abi3=true
+lib_name=python3.9
+lib_dir=/opt/_internal/cpython-3.9.25/lib
+executable=/opt/python/cp39-cp39/bin/python3
+pointer_width=64
+build_flags=
+suppress_build_script_link_lines=false

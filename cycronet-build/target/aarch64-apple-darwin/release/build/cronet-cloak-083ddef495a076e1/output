@@ -1,0 +1,9 @@
+cargo:rustc-env=CRONET_VERSION=144.0.7506.0
+cargo:rerun-if-changed=E:\chrome_do\chromium\cronet-cloak-master\cycronet-do\cycronet-build\cronet-bin\mac\VERSION
+cargo:warning=Using pre-generated macOS bindings
+cargo:warning=Using pre-generated macOS proto
+cargo:rustc-link-search=native=E:\chrome_do\chromium\cronet-cloak-master\cycronet-do\cycronet-build\cronet-bin\mac
+cargo:rustc-link-lib=dylib=cronet
+cargo:rustc-link-arg=-Wl,-rpath,@loader_path
+cargo:rerun-if-changed=E:\chrome_do\chromium\cronet-cloak-master\cycronet-do\cycronet-build\cronet-bin\mac\cronet.dll
+cargo:rerun-if-changed=build.rs

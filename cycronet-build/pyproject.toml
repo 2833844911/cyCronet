@@ -1,0 +1,54 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cycronet"
+version = "144.0.27"
+description = "Python bindings for Cronet-Cloak - Authentic Chrome TLS/HTTP2 fingerprints with async support"
+readme = "README.md"
+requires-python = ">=3.7"
+license = { text = "MIT" }
+keywords = ["cronet", "chrome", "tls", "fingerprint", "http2", "scraping"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/cronet-cloak"
+Repository = "https://github.com/your-org/cronet-cloak"
+
+[tool.maturin]
+python-source = "python"
+module-name = "cycronet.cronet_cloak"
+
+# Include type stubs and native libraries in the wheel package
+include = [
+    { path = "python/cycronet/__init__.pyi", format = "wheel" },
+    { path = "python/cycronet/*.dll", format = "wheel" },
+    { path = "python/cycronet/*.so", format = "wheel" },
+    { path = "python/cycronet/*.dylib", format = "wheel" },
+    { path = "python/cycronet/tls_profiles.json", format = "wheel" },
+    { path = "LINUX_INSTALL_GUIDE.md", format = "sdist" },
+    { path = "setup_linux_env.py", format = "sdist" }
+]
+
+# Exclude unnecessary files from source
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/*.backup*",
+    "cronet-bin/**"
+]
+

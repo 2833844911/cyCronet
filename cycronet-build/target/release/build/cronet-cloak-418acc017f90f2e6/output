@@ -1,0 +1,18 @@
+cargo:rustc-env=CRONET_VERSION=144.0.7506.0
+cargo:rerun-if-changed=E:\chrome_do\chromium\cronet-cloak-master\cycronet-do\cycronet-build\cronet-bin\VERSION
+cargo:rerun-if-env-changed=TARGET
+cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS_x86_64-pc-windows-msvc
+cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS_x86_64_pc_windows_msvc
+cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS
+cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\stdbool.h
+cargo:rerun-if-changed=E:\chrome_do\chromium\cronet-cloak-master\cycronet-do\cycronet-build\cronet-bin\include\cronet.idl_c.h
+cargo:rerun-if-changed=E:\chrome_do\chromium\cronet-cloak-master\cycronet-do\cycronet-build\cronet-bin\include\cronet_export.h
+cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\stdint.h
+cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\vcruntime.h
+cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\sal.h
+cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\concurrencysal.h
+cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\vadefs.h
+cargo:rustc-link-search=native=E:\chrome_do\chromium\cronet-cloak-master\cycronet-do\cycronet-build\cronet-bin
+cargo:rustc-link-lib=dylib=cronet
+cargo:rerun-if-changed=E:\chrome_do\chromium\cronet-cloak-master\cycronet-do\cycronet-build\cronet-bin\cronet.dll
+cargo:rerun-if-changed=build.rs

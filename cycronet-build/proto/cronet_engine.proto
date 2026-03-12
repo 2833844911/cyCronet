@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package cronet.engine.v1;
+
+
+
+service EngineService {
+  // Execute a single HTTP request via the Cronet engine.
+  rpc Execute (ExecuteRequest) returns (ExecuteResponse);
+}
+
+message ExecuteRequest {
+  // The unique identifier for this request (for tracing).
+  string request_id = 1;
+  
+  // The target HTTP request details.
+  TargetRequest target = 2;
+  
+  // Configuration for how this request should be executed.
+  ExecutionConfig config = 3;
+}
+
+message TargetRequest {
+  string method = 1; // e.g., "GET", "POST"
+  string url = 2;
+
+  // Ordered headers list - preserves insertion order
+  repeated Header headers = 3;
+
+  // Body of the request.
+  // For JSON requests to this service, send base64 encoded string if strictly using JSON.
+  bytes body = 4;
+}
+
+// Single header with name and value
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+message ExecutionConfig {
+  // Timeout in milliseconds.
+  uint32 timeout_ms = 1;
+
+  // Whether to automatically follow HTTP redirects.
+  bool follow_redirects = 2;
+
+  // Optional proxy configuration.
+  ProxyConfig proxy = 3;
+
+  // If set to true, SSL certificate verification will be skipped.
+  // WARNING: This is insecure and should only be used for testing purposes.
+  bool skip_cert_verify = 4;
+}
+
+message ProxyConfig {
+  string host = 1;
+  uint32 port = 2;
+  
+  // Optional authentication.
+  string username = 3;
+  string password = 4;
+  
+  enum ProxyType {
+    HTTP = 0;
+    HTTPS = 1;
+    SOCKS5 = 2;
+  }
+  ProxyType type = 5;
+}
+
+message ExecuteResponse {
+  string request_id = 1;
+  
+  // True if the network call was attempted (even if it returned 404/500).
+  // False if internal engine error occurred.
+  bool success = 2;
+  
+  // Error message if success is false.
+  string error_message = 3;
+  
+  // The HTTP response details.
+  TargetResponse response = 4;
+  
+  // Time taken for the request in milliseconds.
+  int64 duration_ms = 5;
+}
+
+message TargetResponse {
+  int32 status_code = 1;
+  map<string, HeaderValues> headers = 2;
+  bytes body = 3;
+}
+
+message HeaderValues {
+  repeated string values = 1;
+}

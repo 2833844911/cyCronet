@@ -1,0 +1,11 @@
+cargo:rustc-env=CRONET_VERSION=144.0.7506.0
+cargo:rerun-if-changed=/io/cronet-bin/linux/VERSION
+cargo:warning=Using pre-generated Linux bindings
+cargo:warning=Using pre-generated Linux proto
+cargo:rustc-link-search=native=/io/cronet-bin/linux
+cargo:rustc-link-lib=dylib=cronet
+cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN
+cargo:rustc-link-arg=-Wl,--enable-new-dtags
+cargo:warning=Copied SO to python package directory
+cargo:rerun-if-changed=/io/cronet-bin/linux/libcronet.so
+cargo:rerun-if-changed=build.rs

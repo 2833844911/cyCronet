@@ -1,0 +1,7 @@
+implementation=PyPy
+version=3.8
+shared=true
+abi3=false
+build_flags=
+suppress_build_script_link_lines=false
+pointer_width=64

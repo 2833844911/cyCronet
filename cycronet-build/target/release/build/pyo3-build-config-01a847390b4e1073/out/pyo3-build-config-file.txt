@@ -1,0 +1,8 @@
+implementation=PyPy
+version=3.11
+shared=true
+abi3=false
+lib_name=python311
+pointer_width=64
+build_flags=
+suppress_build_script_link_lines=false

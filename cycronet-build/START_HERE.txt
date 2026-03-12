@@ -1,0 +1,68 @@
+================================================================================
+                    🚀 Cycronet 多平台构建目录
+================================================================================
+
+欢迎使用 Cycronet 构建目录!这是一个干净、独立的构建环境。
+
+📋 第一步: 检查环境
+-------------------
+运行环境检查脚本:
+  .\check_env.ps1
+
+这将检查:
+  ✓ Rust 工具链
+  ✓ Python 3.8+
+  ✓ Maturin
+  ✓ cargo-zigbuild
+  ✓ Docker Desktop
+  ✓ Rust 目标平台
+  ✓ Cronet 库文件
+  ✓ Linux NSS 依赖
+
+📦 第二步: 开始构建
+-------------------
+编译所有平台:
+  .\build_all.ps1 -Platform all
+
+或单独编译:
+  .\build_all.ps1 -Platform windows
+  .\build_all.ps1 -Platform linux
+  .\build_all.ps1 -Platform macos
+
+📖 第三步: 查看文档
+-------------------
+- BUILD_INSTRUCTIONS.md - 完整构建说明
+- build_ALL.md - 详细构建文档  
+- CHECKLIST.md - 文件清单
+- README_BUILD.txt - 快速参考
+
+🎯 构建输出
+-----------
+生成的 wheel 文件位于: target/wheels/
+
+预期输出:
+  ✓ cycronet-144.0.27-cp38-abi3-win_amd64.whl (~8.3MB)
+  ✓ cycronet-144.0.27-cp38-abi3-manylinux_2_24_x86_64.whl (~22MB)
+  ✓ cycronet-144.0.27-cp38-abi3-macosx_11_0_arm64.whl (~8.7MB)
+
+📊 目录统计
+-----------
+总大小: ~103 MB
+包含:
+  - 3 个平台的 Cronet 库 (Windows/Linux/macOS)
+  - 9 个 Linux NSS 依赖库
+  - 完整的 Rust 和 Python 源代码
+  - 构建脚本和文档
+
+⚠️ 重要提示
+-----------
+1. Linux 编译需要 Docker Desktop 运行
+2. macOS 交叉编译使用 Zig 工具链
+3. 不要修改 cronet-libs/ 和 linux_deps/ 目录
+4. 所有 wheel 支持 Python 3.8-3.13
+
+🆘 需要帮助?
+-----------
+查看详细文档: BUILD_INSTRUCTIONS.md
+
+================================================================================
