@@ -26,6 +26,26 @@ fn safe_cstring(s: &str, context: &str) -> Result<CString, String> {
     })
 }
 
+// 验证 HTTP header name 是否合法 (RFC 7230 token)
+// token = 1*tchar
+// tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." /
+//         "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
+fn is_valid_header_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    name.bytes().all(|b| matches!(b,
+        b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' |
+        b'^' | b'_' | b'`' | b'|' | b'~' |
+        b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
+    ))
+}
+
+// 验证 HTTP header value 是否合法（不含控制字符，除了水平制表符）
+fn is_valid_header_value(value: &str) -> bool {
+    value.bytes().all(|b| b == b'\t' || (b >= 0x20 && b != 0x7f))
+}
+
 // -----------------------------------------------------------------------------
 // Cronet Engine
 // -----------------------------------------------------------------------------
@@ -238,8 +258,16 @@ impl CronetEngine {
 
             let c_url = CString::new(target.url.as_str()).unwrap();
 
-            // Headers - 按顺序添加
+            // Headers - 按顺序添加（跳过无效的 header name/value）
             for header in &target.headers {
+                if !is_valid_header_name(&header.name) {
+                    eprintln!("[WARN] Skipping header with invalid name: {:?}", header.name);
+                    continue;
+                }
+                if !is_valid_header_value(&header.value) {
+                    eprintln!("[WARN] Skipping header with invalid value for key {:?}", header.name);
+                    continue;
+                }
                 let c_key = CString::new(header.name.as_str()).unwrap();
                 let c_val = CString::new(header.value.as_str()).unwrap();
 
@@ -1113,8 +1141,16 @@ impl SessionManager {
 
             let c_url = CString::new(target.url.as_str()).unwrap();
 
-            // Headers - 按顺序添加
+            // Headers - 按顺序添加（跳过无效的 header name/value）
             for header in &target.headers {
+                if !is_valid_header_name(&header.name) {
+                    eprintln!("[WARN] Skipping header with invalid name: {:?}", header.name);
+                    continue;
+                }
+                if !is_valid_header_value(&header.value) {
+                    eprintln!("[WARN] Skipping header with invalid value for key {:?}", header.name);
+                    continue;
+                }
                 let c_key = CString::new(header.name.as_str()).unwrap();
                 let c_val = CString::new(header.value.as_str()).unwrap();
 

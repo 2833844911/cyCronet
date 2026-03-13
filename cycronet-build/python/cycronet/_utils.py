@@ -64,6 +64,47 @@ def parse_set_cookie(set_cookie_values: List[str]) -> List[Tuple[str, str, str]]
     return cookies
 
 
+# RFC 7230 tchar characters allowed in HTTP header field-names
+_TCHAR = frozenset(
+    '!#$%&\'*+-.^_`|~'
+    '0123456789'
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    'abcdefghijklmnopqrstuvwxyz'
+)
+
+
+def validate_header_name(name: str) -> None:
+    """Validate HTTP header name per RFC 7230.
+
+    Raises:
+        ValueError: If the header name contains invalid characters.
+    """
+    if not name:
+        raise ValueError("Header name must not be empty")
+    for ch in name:
+        if ch not in _TCHAR:
+            raise ValueError(
+                f"Invalid character {ch!r} in header name {name!r}. "
+                f"Header names may only contain letters, digits, and !#$%&'*+-.^_`|~ characters."
+            )
+
+
+def validate_header_value(value: str) -> None:
+    """Validate HTTP header value (no control characters except HTAB).
+
+    Raises:
+        ValueError: If the header value contains invalid characters.
+    """
+    for ch in value:
+        code = ord(ch)
+        if code == 0x09:  # HTAB is allowed
+            continue
+        if code < 0x20 or code == 0x7f:
+            raise ValueError(
+                f"Invalid control character (0x{code:02x}) in header value for: {value!r}"
+            )
+
+
 def domain_matches(cookie_domain: str, request_domain: str) -> bool:
     """Check if cookie domain matches request domain."""
     if not cookie_domain:
