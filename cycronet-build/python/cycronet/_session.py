@@ -22,28 +22,142 @@ class Session:
         self._closed = False
         self._verify = verify
         self._cookies = CookieJar()
+        self._default_headers = {}  # Store default headers for session
 
     @property
     def cookies(self) -> CookieJar:
         """Get current session's CookieJar"""
         return self._cookies
 
+    def _adjust_chrome_headers(self, headers: Dict[str, str], method: str, has_body: bool = False, is_json: bool = False) -> Dict[str, str]:
+        """
+        Adjust existing headers to match Chrome browser behavior.
+        Only modifies headers that already exist in the dict.
+        """
+        # Create copy to avoid modifying original data
+        adjusted = headers.copy()
+
+        # Create lowercase key mapping for lookup
+        headers_lower_map = {k.lower(): k for k in adjusted.keys()}
+
+        method_upper = method.upper()
+
+        # Adjust headers based on request type
+        if method_upper in ('GET', 'HEAD'):
+            # GET/HEAD request - navigation mode
+            if 'accept' in headers_lower_map:
+                original_key = headers_lower_map['accept']
+                adjusted[original_key] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
+
+            if 'sec-fetch-dest' in headers_lower_map:
+                original_key = headers_lower_map['sec-fetch-dest']
+                adjusted[original_key] = 'document'
+
+            if 'sec-fetch-mode' in headers_lower_map:
+                original_key = headers_lower_map['sec-fetch-mode']
+                adjusted[original_key] = 'navigate'
+
+            if 'sec-fetch-site' in headers_lower_map:
+                original_key = headers_lower_map['sec-fetch-site']
+                adjusted[original_key] = 'none'
+
+            if 'sec-fetch-user' in headers_lower_map:
+                original_key = headers_lower_map['sec-fetch-user']
+                adjusted[original_key] = '?1'
+
+        elif method_upper in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            # POST/PUT/PATCH/DELETE request
+            if is_json:
+                # JSON request
+                if 'accept' in headers_lower_map:
+                    original_key = headers_lower_map['accept']
+                    adjusted[original_key] = 'application/json, text/plain, */*'
+
+            elif has_body:
+                # Form request
+                if 'accept' in headers_lower_map:
+                    original_key = headers_lower_map['accept']
+                    adjusted[original_key] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+
+            else:
+                # No body POST/DELETE
+                if 'accept' in headers_lower_map:
+                    original_key = headers_lower_map['accept']
+                    adjusted[original_key] = '*/*'
+
+            # Modify sec-fetch-* headers (if they exist)
+            if 'sec-fetch-dest' in headers_lower_map:
+                original_key = headers_lower_map['sec-fetch-dest']
+                adjusted[original_key] = 'empty'
+
+            if 'sec-fetch-mode' in headers_lower_map:
+                original_key = headers_lower_map['sec-fetch-mode']
+                adjusted[original_key] = 'cors'
+
+            if 'sec-fetch-site' in headers_lower_map:
+                original_key = headers_lower_map['sec-fetch-site']
+                adjusted[original_key] = 'same-origin'
+
+            # POST requests usually don't have sec-fetch-user
+            if 'sec-fetch-user' in headers_lower_map:
+                original_key = headers_lower_map['sec-fetch-user']
+                # Remove it for POST requests
+                del adjusted[original_key]
+
+        return adjusted
+
     def _prepare_headers(
         self,
         headers: Optional[HeadersType] = None,
         cookies: Optional[CookiesType] = None,
-        domain: str = ""
+        domain: str = "",
+        method: str = "GET",
+        has_body: bool = False,
+        is_json: bool = False,
+        need_content_type: Optional[str] = None
     ) -> List[Tuple[str, str]]:
-        """Prepare request headers"""
-        if headers is None:
-            headers_list = []
-        elif isinstance(headers, dict):
-            # Python 3.7+ dict maintains insertion order, convert directly to list
-            headers_list = list(headers.items())
-        else:
-            # List maintains original order
-            headers_list = list(headers)
+        """Prepare request headers with session defaults"""
 
+        # Check if user provided headers
+        user_provided = headers is not None
+
+        # Decide which headers to use
+        if user_provided:
+            # User provided, use user's headers
+            if isinstance(headers, dict):
+                headers_dict = headers.copy()
+            else:
+                headers_dict = dict(headers)
+
+            # Save to session (update default headers)
+            self._default_headers = headers_dict.copy()
+
+        elif self._default_headers:
+            # User didn't provide, use saved headers
+            headers_dict = self._default_headers.copy()
+
+            # Adjust existing headers based on request type
+            headers_dict = self._adjust_chrome_headers(
+                headers_dict,
+                method,
+                has_body=has_body,
+                is_json=is_json
+            )
+
+        else:
+            # No headers at all
+            headers_dict = {}
+
+        # Add content-type if needed (and not already present)
+        if need_content_type:
+            headers_lower_map = {k.lower(): k for k in headers_dict.keys()}
+            if 'content-type' not in headers_lower_map:
+                headers_dict['content-type'] = need_content_type
+
+        # Convert to list
+        headers_list = list(headers_dict.items())
+
+        # Process cookie, priority headers (keep original logic)
         normal_headers = []
         priority_headers = []
         cookie_headers = []
@@ -135,30 +249,21 @@ class Session:
         else:
             headers_to_prepare = list(headers)
 
+        # Determine request type
+        is_json_request = json is not None
+        has_body = data is not None or json is not None
+        need_content_type = None
+
         # Handle json parameter
         if json is not None:
             data = json
-            if isinstance(headers_to_prepare, dict):
-                if 'content-type' not in {k.lower() for k in headers_to_prepare.keys()}:
-                    headers_to_prepare['content-type'] = 'application/json'
-            elif isinstance(headers_to_prepare, list):
-                if not any(k.lower() == 'content-type' for k, v in headers_to_prepare):
-                    headers_to_prepare.append(('content-type', 'application/json'))
-            else:
-                headers_to_prepare = [('content-type', 'application/json')]
+            need_content_type = 'application/json'
 
         # Handle data parameter
         elif data is not None:
             if isinstance(data, dict):
                 data = urlencode(data)
-                if isinstance(headers_to_prepare, dict):
-                    if 'content-type' not in {k.lower() for k in headers_to_prepare.keys()}:
-                        headers_to_prepare['content-type'] = 'application/x-www-form-urlencoded'
-                elif isinstance(headers_to_prepare, list):
-                    if not any(k.lower() == 'content-type' for k, v in headers_to_prepare):
-                        headers_to_prepare.append(('content-type', 'application/x-www-form-urlencoded'))
-                else:
-                    headers_to_prepare = [('content-type', 'application/x-www-form-urlencoded')]
+                need_content_type = 'application/x-www-form-urlencoded'
 
         # Prepare request body
         if data is None:
@@ -170,8 +275,16 @@ class Session:
         else:
             body = data
 
-        # Prepare headers
-        prepared_headers = self._prepare_headers(headers_to_prepare, cookies, domain)
+        # Prepare headers (pass request type information)
+        prepared_headers = self._prepare_headers(
+            headers_to_prepare,
+            cookies,
+            domain,
+            method=method,
+            has_body=has_body,
+            is_json=is_json_request,
+            need_content_type=need_content_type
+        )
 
         # Always disable redirects at Rust layer, handle in Python
         response_dict = self._client._client.request(
