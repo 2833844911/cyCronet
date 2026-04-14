@@ -344,6 +344,7 @@ impl CronetEngine {
                 upload_data_provider_ptr,
                 upload_body_data,
                 completed,
+                pending_requests: None,  // CronetEngine 不使用 Session，所以没有 pending_requests
             };
 
             (request_handle, rx)
@@ -393,6 +394,7 @@ pub struct CronetRequest {
     upload_data_provider_ptr: Option<Cronet_UploadDataProviderPtr>,
     upload_body_data: Option<Vec<u8>>, // Owns the body data so pointers are valid
     completed: Arc<AtomicBool>,  // 标记请求是否完成，由回调设置
+    pending_requests: Option<Arc<Mutex<Vec<Cronet_UrlRequestPtr>>>>,  // 用于在完成时从列表移除
 }
 
 unsafe impl Send for CronetRequest {}
@@ -400,6 +402,16 @@ unsafe impl Send for CronetRequest {}
 impl Drop for CronetRequest {
     fn drop(&mut self) {
         unsafe {
+            // 从 pending_requests 列表中移除
+            if let Some(ref pending) = self.pending_requests {
+                if let Ok(mut list) = pending.lock() {
+                    if let Some(pos) = list.iter().position(|&p| p == self.ptr) {
+                        list.swap_remove(pos);
+                        verbose_log!("[DEBUG] CronetRequest::drop - Removed from pending list");
+                    }
+                }
+            }
+
             // 检查请求是否已完成
             if !self.completed.load(Ordering::Acquire) {
                 // 请求尚未完成，先取消它
@@ -875,6 +887,7 @@ pub struct Session {
     active_requests: Arc<AtomicUsize>,  // 追踪活跃请求数量（仅用于监控）
     in_flight_executors: Arc<AtomicUsize>,  // 追踪正在执行的 executor 回调数量
     is_closed: Arc<AtomicBool>,  // 标记 session 是否已关闭
+    pending_requests: Arc<Mutex<Vec<Cronet_UrlRequestPtr>>>,  // 追踪所有进行中的请求指针
 }
 
 unsafe impl Send for Session {}
@@ -889,20 +902,30 @@ impl Drop for Session {
 
         unsafe {
             if !self.engine_ptr.is_null() {
-                // 等待所有活跃请求完成
                 let active = self.active_requests.load(Ordering::Acquire);
                 verbose_log!("[DEBUG] Session::drop - active_requests={}", active);
 
                 if active > 0 {
-                    verbose_log!("[DEBUG] Session::drop - Waiting for {} active requests to complete", active);
+                    // 主动取消所有进行中的请求
+                    verbose_log!("[DEBUG] Session::drop - Cancelling {} active requests", active);
+                    if let Ok(mut requests) = self.pending_requests.lock() {
+                        for request_ptr in requests.drain(..) {
+                            if !request_ptr.is_null() {
+                                verbose_log!("[DEBUG] Session::drop - Cancelling request {:?}", request_ptr);
+                                Cronet_UrlRequest_Cancel(request_ptr);
+                            }
+                        }
+                    }
+
+                    // 等待请求完成取消（最多5秒）
                     let start = std::time::Instant::now();
                     while self.active_requests.load(Ordering::Acquire) > 0 {
-                        if start.elapsed() > std::time::Duration::from_secs(30) {
-                            eprintln!("[WARN] Session::drop - Timeout waiting for {} active requests",
+                        if start.elapsed() > std::time::Duration::from_secs(5) {
+                            eprintln!("[WARN] Session::drop - Timeout waiting for {} active requests after cancellation",
                                 self.active_requests.load(Ordering::Acquire));
                             break;
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        std::thread::sleep(std::time::Duration::from_millis(10));
                     }
                 }
 
@@ -1025,6 +1048,7 @@ impl SessionManager {
                 active_requests: Arc::new(AtomicUsize::new(0)),
                 in_flight_executors: in_flight,
                 is_closed: Arc::new(AtomicBool::new(false)),
+                pending_requests: Arc::new(Mutex::new(Vec::new())),
             };
 
             verbose_log!("[DEBUG] Created session: {}", session_id);
@@ -1079,6 +1103,7 @@ impl SessionManager {
             target,
             Some(session.active_requests.clone()),
             Some(session.in_flight_executors.clone()),
+            Some(session.pending_requests.clone()),
             allow_redirects,
         );
 
@@ -1091,6 +1116,7 @@ impl SessionManager {
         target: &crate::cronet_pb::TargetRequest,
         active_requests: Option<Arc<AtomicUsize>>,
         in_flight_executors: Option<Arc<AtomicUsize>>,
+        pending_requests: Option<Arc<Mutex<Vec<Cronet_UrlRequestPtr>>>>,
         allow_redirects: bool,
     ) -> (CronetRequest, oneshot::Receiver<Result<RequestResult, String>>) {
         unsafe {
@@ -1212,6 +1238,13 @@ impl SessionManager {
 
             Cronet_UrlRequestParams_Destroy(params_ptr);
 
+            // 将请求指针添加到 pending_requests 列表
+            if let Some(ref pending) = pending_requests {
+                if let Ok(mut list) = pending.lock() {
+                    list.push(request_ptr);
+                }
+            }
+
             // Start
             Cronet_UrlRequest_Start(request_ptr);
 
@@ -1224,6 +1257,7 @@ impl SessionManager {
                 upload_data_provider_ptr,
                 upload_body_data,
                 completed,
+                pending_requests,  // 保存引用以便在完成时移除
             };
 
             (request_handle, rx)

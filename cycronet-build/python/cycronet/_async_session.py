@@ -10,19 +10,19 @@ from urllib.parse import urlparse, urlencode
 from ._types import HeadersType, CookiesType, DataType
 from ._cookies import CookieJar
 from ._response import Response, HTTPStatusError, RequestError
-from ._utils import extract_domain, parse_set_cookie, domain_matches
+from ._utils import extract_domain, parse_set_cookie, domain_matches, normalize_cookie_domain
 
 
 class AsyncSession:
     """Async Session object - supports async/await"""
 
-    def __init__(self, client: 'AsyncCronetClient', session_id: str, verify: bool = True):
+    def __init__(self, client: 'AsyncCronetClient', session_id: str, verify: bool = True, headers: Optional[Dict[str, str]] = None):
         self._client = client
         self._session_id = session_id
         self._closed = False
         self._verify = verify
         self._cookies = CookieJar()
-        self._default_headers = {}  # Store default headers for session
+        self._default_headers = dict(headers) if headers else {}  # Store default headers for session
 
     @property
     def cookies(self) -> CookieJar:
@@ -192,13 +192,14 @@ class AsyncSession:
         return result
 
     def _update_cookies_from_response(self, headers: Dict[str, List[str]], request_domain: str):
-        """Extract Set-Cookie from response headers"""
+        """Extract Set-Cookie from response headers and update session cookies."""
+        request_domain = normalize_cookie_domain(request_domain)
         for name, values in headers.items():
             if name.lower() == 'set-cookie':
                 parsed_cookies = parse_set_cookie(values)
-                for cookie_name, cookie_value, cookie_domain in parsed_cookies:
+                for cookie_name, cookie_value, cookie_domain, cookie_path in parsed_cookies:
                     store_domain = cookie_domain if cookie_domain else request_domain
-                    self._cookies.set(cookie_name, cookie_value, store_domain)
+                    self._cookies.set(cookie_name, cookie_value, store_domain, cookie_path)
 
     async def request(
         self,
@@ -236,8 +237,8 @@ class AsyncSession:
 
         domain = extract_domain(url)
 
-        if cookies:
-            self._cookies.update(cookies, domain)
+        # Per-request cookies are NOT merged into session (matching requests behavior).
+        # They are only used for this single request via _prepare_headers.
 
         if headers is None:
             headers_to_prepare = None
@@ -307,9 +308,9 @@ class AsyncSession:
         response_cookies = CookieJar()
         for header_name, values in resp_headers.items():
             if header_name.lower() == 'set-cookie':
-                for cookie_name, cookie_value, cookie_domain in parse_set_cookie(values):
-                    store_domain = cookie_domain if cookie_domain else domain
-                    response_cookies.set(cookie_name, cookie_value, store_domain)
+                for cookie_name, cookie_value, cookie_domain, cookie_path in parse_set_cookie(values):
+                    store_domain = cookie_domain if cookie_domain else normalize_cookie_domain(domain)
+                    response_cookies.set(cookie_name, cookie_value, store_domain, cookie_path)
 
         # Update session cookies from response
         self._update_cookies_from_response(resp_headers, domain)
@@ -333,15 +334,12 @@ class AsyncSession:
                 redirect_method = 'GET' if status_code == 303 else method
 
                 # Recursively call request with updated URL
-                # Note: cookies=None means "use session cookies only" (which includes Set-Cookie from redirect response)
-                # User-provided cookies were already added to self._cookies at line 125
-                # Server Set-Cookie was added to self._cookies at line 209
                 return await self.request(
                     redirect_method,
                     location,
                     params=None,  # Don't carry params on redirect
                     headers=headers_to_prepare,  # Carry original headers
-                    cookies=None,  # Use session cookies (includes both user cookies and Set-Cookie from response)
+                    cookies=cookies,  # Carry per-request cookies through redirect
                     data=None if status_code == 303 else data,  # Drop body for 303
                     json=None,
                     timeout=timeout,

@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use std::sync::Arc;
 use std::time::Duration;
-use pyo3_asyncio::tokio::future_into_py;
+use pyo3_async_runtimes::tokio::future_into_py;
 
 use crate::cronet::{SessionConfig, SessionManager};
 use crate::cronet_pb::{Header, TargetRequest};
@@ -90,7 +90,7 @@ impl PyCronetClient {
         headers: Option<Vec<(String, String)>>,
         body: Option<Vec<u8>>,
         allow_redirects: bool,
-    ) -> PyResult<&'py PyAny> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let headers_vec = headers.unwrap_or_default();
         let body_vec = body.unwrap_or_default();
 
@@ -130,12 +130,12 @@ impl PyCronetClient {
             match result {
                 Ok(Ok(Ok(response))) => {
                     Python::with_gil(|py| {
-                        let dict = PyDict::new(py);
+                        let dict = PyDict::new_bound(py);
                         dict.set_item("status_code", response.status_code)?;
-                        dict.set_item("body", PyBytes::new(py, &response.body))?;
+                        dict.set_item("body", PyBytes::new_bound(py, &response.body))?;
 
                         // Convert headers
-                        let headers_list = PyList::empty(py);
+                        let headers_list = PyList::empty_bound(py);
                         for (name, value) in response.headers {
                             let tuple = (name, value);
                             headers_list.append(tuple)?;
@@ -214,12 +214,12 @@ impl PyCronetClient {
 
                 match response_result {
                     Ok(Ok(Ok(response))) => {
-                        let dict = PyDict::new(py);
+                        let dict = PyDict::new_bound(py);
                         dict.set_item("status_code", response.status_code)?;
-                        dict.set_item("body", PyBytes::new(py, &response.body))?;
+                        dict.set_item("body", PyBytes::new_bound(py, &response.body))?;
 
                         // Convert headers
-                        let headers_list = PyList::empty(py);
+                        let headers_list = PyList::empty_bound(py);
                         for (name, value) in response.headers {
                             let tuple = (name, value);
                             headers_list.append(tuple)?;
@@ -258,7 +258,7 @@ impl PyCronetClient {
 
 /// Python module
 #[pymodule]
-fn cronet_cloak(_py: Python, m: &PyModule) -> PyResult<()> {
+fn cronet_cloak(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCronetClient>()?;
     Ok(())
 }

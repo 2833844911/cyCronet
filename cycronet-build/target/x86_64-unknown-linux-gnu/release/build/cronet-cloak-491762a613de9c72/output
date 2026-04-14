@@ -6,6 +6,7 @@ cargo:rustc-link-search=native=/io/cronet-bin/linux
 cargo:rustc-link-lib=dylib=cronet
 cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN
 cargo:rustc-link-arg=-Wl,--enable-new-dtags
+cargo:warning=Copied /io/cronet-bin/linux/libcronet.so to /io/target/x86_64-unknown-linux-gnu/release/libcronet.144.0.7506.0.so
 cargo:warning=Copied SO to python package directory
 cargo:rerun-if-changed=/io/cronet-bin/linux/libcronet.so
 cargo:rerun-if-changed=build.rs

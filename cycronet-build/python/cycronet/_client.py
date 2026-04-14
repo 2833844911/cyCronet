@@ -109,12 +109,12 @@ def clear_tls_profiles_cache() -> None:
 
 def _load_tls_profile(chrometls: Optional[str] = None) -> Optional[Dict[str, List[str]]]:
     """Get TLS fingerprint configuration for a specific profile"""
-    if chrometls is None:
-        return None
-
     profiles = _load_tls_profiles()
-    if chrometls not in profiles:
-        return None
+    if chrometls is None or chrometls not in profiles:
+        available = ', '.join(sorted(profiles.keys())) if profiles else 'none'
+        raise RequestError(
+            f"TLS profile '{chrometls}' not found. Available profiles: {available}"
+        )
 
     profile = profiles[chrometls]
     return {
@@ -151,6 +151,29 @@ def _validate_proxy_url(proxy_url: str) -> None:
     if not parsed.netloc:
         raise RequestError(f"Invalid proxy URL '{proxy_url}': No host supplied")
 
+    # Extract hostname (without auth and port)
+    hostname = parsed.hostname
+    if not hostname:
+        raise RequestError(f"Invalid proxy URL '{proxy_url}': No hostname supplied")
+
+    # Validate IP address if it looks like one
+    if hostname.replace('.', '').replace(':', '').isdigit() or ':' in hostname:
+        # IPv4 validation
+        if '.' in hostname and ':' not in hostname:
+            parts = hostname.split('.')
+            if len(parts) != 4:
+                raise RequestError(f"Invalid proxy URL '{proxy_url}': Invalid IPv4 address '{hostname}'")
+            for part in parts:
+                try:
+                    num = int(part)
+                    if not (0 <= num <= 255):
+                        raise RequestError(
+                            f"Invalid proxy URL '{proxy_url}': Invalid IPv4 address '{hostname}' "
+                            f"(octet {part} must be 0-255)"
+                        )
+                except ValueError:
+                    raise RequestError(f"Invalid proxy URL '{proxy_url}': Invalid IPv4 address '{hostname}'")
+
     # Check port (if provided)
     try:
         if parsed.port is not None:
@@ -164,7 +187,8 @@ def CronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_144"
+    chrometls: Optional[str] = "chrome_144",
+    headers: Optional[Dict[str, str]] = None
 ) -> Session:
     """
     Create Cronet Session - similar to requests.Session()
@@ -174,6 +198,7 @@ def CronetClient(
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
         chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
+        headers: Default headers for all requests in this session
 
     Returns:
         Session object
@@ -182,6 +207,7 @@ def CronetClient(
         session = CronetClient(verify=False)
         session = CronetClient(proxies={"https": "http://127.0.0.1:8080"})
         session = CronetClient(verify=False, chrometls="chrome_144")
+        session = CronetClient(headers={"User-Agent": "MyApp/1.0"})
         response = session.get("https://example.com")
     """
     # Import here to avoid circular dependency
@@ -222,14 +248,15 @@ def CronetClient(
             self._client = client
 
     wrapper = _ClientWrapper(client)
-    return Session(wrapper, session_id, verify)
+    return Session(wrapper, session_id, verify, headers=headers)
 
 
 def AsyncCronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_144"
+    chrometls: Optional[str] = "chrome_144",
+    headers: Optional[Dict[str, str]] = None
 ) -> AsyncSession:
     """
     Create async Cronet Session - supports async/await
@@ -239,6 +266,7 @@ def AsyncCronetClient(
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
         chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
+        headers: Default headers for all requests in this session
 
     Returns:
         AsyncSession object
@@ -246,7 +274,7 @@ def AsyncCronetClient(
     Example:
         async with AsyncCronetClient(verify=False) as session:
             response = await session.get("https://example.com")
-        async with AsyncCronetClient(verify=False, chrometls="chrome_144") as session:
+        async with AsyncCronetClient(verify=False, headers={"User-Agent": "MyApp/1.0"}) as session:
             response = await session.get("https://example.com")
     """
     # Import here to avoid circular dependency
@@ -284,4 +312,4 @@ def AsyncCronetClient(
             self._client = client
 
     wrapper = _ClientWrapper(client)
-    return AsyncSession(wrapper, session_id, verify)
+    return AsyncSession(wrapper, session_id, verify, headers=headers)
