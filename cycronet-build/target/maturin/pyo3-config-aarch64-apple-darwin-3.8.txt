@@ -1,4 +1,4 @@
-implementation=PyPy
+implementation=CPython
 version=3.8
 shared=true
 abi3=false

@@ -114,7 +114,10 @@ def _load_tls_profile(chrometls: Optional[str] = None) -> Optional[Dict[str, Lis
 
     profiles = _load_tls_profiles()
     if chrometls not in profiles:
-        return None
+        available = ', '.join(sorted(profiles.keys())) if profiles else 'none'
+        raise RequestError(
+            f"TLS profile '{chrometls}' not found. Available profiles: {available}"
+        )
 
     profile = profiles[chrometls]
     return {
@@ -164,7 +167,8 @@ def CronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_144"
+    chrometls: Optional[str] = "chrome_144",
+    headers: Optional[Dict[str, str]] = None
 ) -> Session:
     """
     Create Cronet Session - similar to requests.Session()
@@ -174,6 +178,7 @@ def CronetClient(
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
         chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
+        headers: Default headers for all requests in this session
 
     Returns:
         Session object
@@ -182,6 +187,7 @@ def CronetClient(
         session = CronetClient(verify=False)
         session = CronetClient(proxies={"https": "http://127.0.0.1:8080"})
         session = CronetClient(verify=False, chrometls="chrome_144")
+        session = CronetClient(headers={"User-Agent": "MyApp/1.0"})
         response = session.get("https://example.com")
     """
     # Import here to avoid circular dependency
@@ -222,14 +228,18 @@ def CronetClient(
             self._client = client
 
     wrapper = _ClientWrapper(client)
-    return Session(wrapper, session_id, verify)
+    session = Session(wrapper, session_id, verify)
+    if headers:
+        session.headers = headers
+    return session
 
 
 def AsyncCronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_144"
+    chrometls: Optional[str] = "chrome_144",
+    headers: Optional[Dict[str, str]] = None
 ) -> AsyncSession:
     """
     Create async Cronet Session - supports async/await
@@ -239,6 +249,7 @@ def AsyncCronetClient(
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
         chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
+        headers: Default headers for all requests in this session
 
     Returns:
         AsyncSession object
@@ -246,7 +257,7 @@ def AsyncCronetClient(
     Example:
         async with AsyncCronetClient(verify=False) as session:
             response = await session.get("https://example.com")
-        async with AsyncCronetClient(verify=False, chrometls="chrome_144") as session:
+        async with AsyncCronetClient(headers={"User-Agent": "MyApp/1.0"}) as session:
             response = await session.get("https://example.com")
     """
     # Import here to avoid circular dependency
@@ -284,4 +295,7 @@ def AsyncCronetClient(
             self._client = client
 
     wrapper = _ClientWrapper(client)
-    return AsyncSession(wrapper, session_id, verify)
+    session = AsyncSession(wrapper, session_id, verify)
+    if headers:
+        session.headers = headers
+    return session

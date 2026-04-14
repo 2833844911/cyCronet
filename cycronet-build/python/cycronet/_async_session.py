@@ -25,6 +25,15 @@ class AsyncSession:
         self._default_headers = {}  # Store default headers for session
 
     @property
+    def headers(self) -> Dict[str, str]:
+        """Get/set session default headers - similar to requests.Session().headers"""
+        return self._default_headers
+
+    @headers.setter
+    def headers(self, value: Dict[str, str]):
+        self._default_headers = dict(value) if value else {}
+
+    @property
     def cookies(self) -> CookieJar:
         """Get current session's CookieJar"""
         return self._cookies
