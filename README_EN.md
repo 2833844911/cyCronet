@@ -615,6 +615,37 @@ session.cookies.clear()
 session.close()
 ```
 
+#### Delete Cookies
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+
+# Set some cookies
+session.cookies.set_cookie('token', 'abc', domain='example.com')
+session.cookies.set_cookie('token', 'xyz', domain='api.example.com')
+session.cookies.set_cookie('session_id', 'sess1', domain='example.com')
+session.cookies.set_cookie('tracking', 'tr1', domain='example.com')
+
+# 1. Delete a specific cookie under a specific domain
+session.cookies.delete(name='token', domain='example.com')
+# Only removes token from example.com; api.example.com's token is unaffected
+
+# 2. Delete a cookie by name from ALL domains
+session.cookies.delete(name='token')
+# Removes every cookie named 'token' across all domains
+
+# 3. Delete all cookies for a domain
+session.cookies.delete(domain='example.com')
+# Removes all cookies (session_id, tracking, etc.) under example.com
+
+# View remaining cookies
+print(session.cookies.get_dict())
+
+session.close()
+```
+
 #### Cookie Management in Async Mode
 
 ```python

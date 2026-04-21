@@ -199,11 +199,57 @@ class CookieJar:
         else:
             self._cookies.clear()
 
+    # Alias so that ``jar.set_cookie(name, value, domain)`` works as
+    # documented in the README.
+    set_cookie = set
+
+    def delete(self, name: Optional[str] = None, domain: Optional[str] = None):
+        """Unified cookie deletion.
+
+        - ``delete(name="key", domain="example.com")`` — delete one cookie
+          with the given *name* under the exact *domain*.
+        - ``delete(name="key")`` — delete the cookie named *key* from
+          **every** domain bucket.
+        - ``delete(domain="example.com")`` — delete **all** cookies stored
+          under *domain*.
+
+        At least one of *name* or *domain* must be provided; passing neither
+        raises :class:`ValueError`.
+
+        :param name: cookie name (optional)
+        :param domain: cookie domain (optional)
+        """
+        if name is None and domain is None:
+            raise ValueError("At least one of 'name' or 'domain' must be provided")
+
+        if domain is not None:
+            domain = Cookie._normalize_domain(domain)
+
+        if name is not None and domain is not None:
+            # Delete a specific cookie from a specific domain
+            if domain in self._cookies and name in self._cookies[domain]:
+                del self._cookies[domain][name]
+                if not self._cookies[domain]:
+                    del self._cookies[domain]
+        elif name is not None:
+            # Delete this name from ALL domains
+            for d in list(self._cookies.keys()):
+                if name in self._cookies[d]:
+                    del self._cookies[d][name]
+                    if not self._cookies[d]:
+                        del self._cookies[d]
+        else:
+            # domain is not None, name is None → delete entire domain
+            if domain in self._cookies:
+                del self._cookies[domain]
+
     def remove(self, name: str, domain: Optional[str] = None):
         """Remove a specific cookie.
 
         :param name: cookie name
         :param domain: if specified, only remove from that domain
+
+        .. deprecated:: Use :meth:`delete` instead for a more flexible API.
         """
         if domain is not None:
             domain = Cookie._normalize_domain(domain)
