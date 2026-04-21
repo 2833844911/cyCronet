@@ -16,12 +16,13 @@ from ._utils import extract_domain, parse_set_cookie, domain_matches, normalize_
 class Session:
     """Session object - compatible with requests.Session"""
 
-    def __init__(self, client: 'CronetClient', session_id: str, verify: bool = True):
+    def __init__(self, client: 'CronetClient', session_id: str, verify: bool = True,
+                 default_domain: Optional[str] = None):
         self._client = client
         self._session_id = session_id
         self._closed = False
         self._verify = verify
-        self._cookies = CookieJar()
+        self._cookies = CookieJar(default_domain=default_domain)
         self._default_headers = {}  # Store default headers for session
 
     @property
@@ -180,11 +181,15 @@ class Session:
             else:
                 normal_headers.append((k, v))
 
-        # Get matching cookies from CookieJar
-        merged_cookies = {}
-        for cookie in self._cookies:
-            if not cookie.domain or cookie.domain == domain or domain_matches(cookie.domain, domain):
-                merged_cookies[cookie.name] = cookie.value
+        # Dedup by name using per-cookie write sequence — newest wins
+        # (matches requests / browser behaviour). See AsyncSession.request
+        # for rationale.
+        matched = [
+            c for c in self._cookies.iter_cookies()
+            if not c.domain or c.domain == domain or domain_matches(c.domain, domain)
+        ]
+        matched.sort(key=lambda c: c.seq)
+        merged_cookies = {c.name: c.value for c in matched}
 
         if cookies:
             merged_cookies.update(cookies)
