@@ -124,6 +124,17 @@ def _load_tls_profile(chrometls: Optional[str] = None) -> Optional[Dict[str, Lis
     }
 
 
+def _extract_base_url_host(base_url: Optional[str]) -> str:
+    """Return the normalised host from *base_url*, or empty string."""
+    if not base_url:
+        return ""
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    if host.startswith("."):
+        host = host[1:]
+    return host
+
+
 def _validate_proxy_url(proxy_url: str) -> None:
     """Validate proxy URL format"""
     if not proxy_url or not isinstance(proxy_url, str):
@@ -188,7 +199,9 @@ def CronetClient(
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
     chrometls: Optional[str] = "chrome_144",
-    headers: Optional[Dict[str, str]] = None
+    headers: Optional[Dict[str, str]] = None,
+    base_url: Optional[str] = None,
+    default_domain: Optional[str] = None
 ) -> Session:
     """
     Create Cronet Session - similar to requests.Session()
@@ -199,6 +212,12 @@ def CronetClient(
         timeout_ms: Timeout in milliseconds
         chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
         headers: Default headers for all requests in this session
+        base_url: Optional base URL; its host is used as the default cookie
+            domain when *default_domain* is not set.
+        default_domain: Explicit default domain for the cookie jar (e.g.
+            ``site.com``). Takes precedence over *base_url*.
+            If neither is set, the host of the first outgoing request is
+            used automatically (host-only).
 
     Returns:
         Session object
@@ -247,8 +266,10 @@ def CronetClient(
         def __init__(self, client):
             self._client = client
 
+    effective_default = default_domain or _extract_base_url_host(base_url)
     wrapper = _ClientWrapper(client)
-    return Session(wrapper, session_id, verify, headers=headers)
+    return Session(wrapper, session_id, verify, headers=headers,
+                   default_domain=effective_default or None)
 
 
 def AsyncCronetClient(
@@ -256,7 +277,9 @@ def AsyncCronetClient(
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
     chrometls: Optional[str] = "chrome_144",
-    headers: Optional[Dict[str, str]] = None
+    headers: Optional[Dict[str, str]] = None,
+    base_url: Optional[str] = None,
+    default_domain: Optional[str] = None
 ) -> AsyncSession:
     """
     Create async Cronet Session - supports async/await
@@ -267,6 +290,11 @@ def AsyncCronetClient(
         timeout_ms: Timeout in milliseconds
         chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
         headers: Default headers for all requests in this session
+        base_url: Optional base URL; its host is used as the default cookie
+            domain when *default_domain* is not set.
+        default_domain: Explicit default domain for the cookie jar.
+            If neither is set, the host of the first outgoing request is
+            used automatically (host-only).
 
     Returns:
         AsyncSession object
@@ -311,5 +339,7 @@ def AsyncCronetClient(
         def __init__(self, client):
             self._client = client
 
+    effective_default = default_domain or _extract_base_url_host(base_url)
     wrapper = _ClientWrapper(client)
-    return AsyncSession(wrapper, session_id, verify, headers=headers)
+    return AsyncSession(wrapper, session_id, verify, headers=headers,
+                        default_domain=effective_default or None)

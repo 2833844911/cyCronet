@@ -9,7 +9,7 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🚀 同时支持同步和异步 API
 - ⚡ 异步并发请求，性能提升 5-10 倍
 - 🔄 与 aiohttp/httpx 相同的使用体验
-- 🎯 真实的 Chrome TLS/HTTP2 指纹（同步和异步均支持）
+[README.md](../README.md)- 🎯 真实的 Chrome TLS/HTTP2 指纹（同步和异步均支持）
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
 
 ### 为什么需要 Cycronet？
@@ -600,6 +600,37 @@ print(f"key1 = {value}")
 
 # 清空所有 Cookie
 session.cookies.clear()
+
+session.close()
+```
+
+#### 删除 Cookie
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+
+# 设置一些 Cookie
+session.cookies.set_cookie('token', 'abc', domain='example.com')
+session.cookies.set_cookie('token', 'xyz', domain='api.example.com')
+session.cookies.set_cookie('session_id', 'sess1', domain='example.com')
+session.cookies.set_cookie('tracking', 'tr1', domain='example.com')
+
+# 1. 删除指定域名下的指定 Cookie
+session.cookies.delete(name='token', domain='example.com')
+# 只删除 example.com 下的 token，api.example.com 的 token 不受影响
+
+# 2. 删除所有域名下的同名 Cookie
+session.cookies.delete(name='token')
+# 所有域名下叫 token 的 Cookie 全部删除
+
+# 3. 删除某个域名的所有 Cookie
+session.cookies.delete(domain='example.com')
+# example.com 下的所有 Cookie（session_id、tracking 等）全部删除
+
+# 查看剩余 Cookie
+print(session.cookies.get_dict())
 
 session.close()
 ```

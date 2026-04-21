@@ -1,14 +1,8 @@
 # Cycronet - 绕过 TLS/HTTP2 指纹检测的 Python HTTP 客户端
 
-[English](README_EN.md) | 简体中文
-
-## cycronet交流群
-- 加作者微信 Chankipen 说明来意
-
-
 ## 🎯 核心功能
 
-浏览器请求协议指纹检测的尽头，当前库已经没有任何检测点，支持高并发，项目语法类似requests使用方便，Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大的特点是能够产生真实的 Chrome 浏览器 TLS/HTTP2 指纹**，从而绕过各种反爬虫和指纹检测系统。
+Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大的特点是能够产生真实的 Chrome 浏览器 TLS/HTTP2 指纹**，从而绕过各种反爬虫和指纹检测系统。
 
 **✨ 新特性：**
 
@@ -44,15 +38,6 @@
 **Cycronet 的解决方案：**
 
 Cycronet 直接使用 Chromium 的 Cronet 网络库，产生的所有网络特征与真实 Chrome 浏览器**完全一致**，无法被检测出是爬虫。
-
-## 项目使用
-```bash
-pip install cycronet
-```
-- 当前项目支持macos arm64, linux(glibc_2.18+), win64, win32
-- 代理支持http,https，socks5(无账号密码)
-- socks5带账号密码的使用pproxy转为http`pip install pproxy` `pproxy -l http://127.0.0.1:8118 -r socks5://user:pass@remote:1080`
-
 
 ## 🔐 TLS/HTTP2 指纹绕过
 
@@ -168,6 +153,7 @@ session = cycronet.CronetClient(
 **支持的 TLS 配置：**
 - `chrome_144`: Chrome 144 版本的 TLS 指纹（默认）
 
+#### 添加自定义 TLS 配置
 
 ##### 使用 set_tls_profiles() 函数
 ```python
@@ -187,9 +173,6 @@ session = cycronet.CronetClient(chrometls="chrome_test")
 ```
 
 ##### 你可以通过编辑 `tls_profiles.json` 文件来添加自定义的 TLS 指纹配置。
-
-
-你可以通过编辑 `tls_profiles.json` 文件来添加自定义的 TLS 指纹配置。
 
 **1. 找到配置文件位置**
 
@@ -540,9 +523,9 @@ session = cycronet.CronetClient(
 )
 
 # 方法 1: 使用 set_cookie 设置 Cookie（推荐）
-session.cookies.update({'session_id': 'abc123'}, domain='www.baidu.com')
-session.cookies.update({'user_token': 'xyz789'}, domain='tsvmp.com')
-session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
+session.cookies.set_cookie('session_id', 'abc123', domain='example.com')
+session.cookies.set_cookie('user_token', 'xyz789', domain='example.com')
+session.cookies.set_cookie('preferences', 'dark_mode=1', domain='example.com')
 
 # 方法 2: 使用 update 批量设置（不指定域名）
 session.cookies.update({
@@ -565,10 +548,9 @@ import cycronet
 session = cycronet.CronetClient(verify=False)
 
 # 为不同域名设置不同的 Cookie
-session.cookies.update({'session_id': 'abc123'}, domain='www.baidu.com')
-session.cookies.update({'user_token': 'xyz789'}, domain='tsvmp.com')
-session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
-
+session.cookies.set_cookie('api_key', 'key123', domain='api.example.com')
+session.cookies.set_cookie('user_token', 'token456', domain='www.example.com')
+session.cookies.set_cookie('session', 'session789', domain='example.com', path='/admin')
 
 # 访问不同域名时会自动使用对应的 Cookie
 response1 = session.get('https://api.example.com/data')      # 携带 api_key
@@ -589,8 +571,7 @@ session = cycronet.CronetClient(verify=False)
 response = session.get('https://example.com/login')
 
 # 从响应中获取 Cookie 并更新
-session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
-
+session.cookies.set_cookie('auth_token', 'new_token_from_response', domain='example.com')
 
 # 后续请求会携带更新后的 Cookie
 response = session.get('https://example.com/dashboard')
@@ -606,8 +587,8 @@ import cycronet
 session = cycronet.CronetClient(verify=False)
 
 # 设置 Cookie
-session.cookies.update({'session_id': 'abc123'}, domain='example.com')
-session.cookies.update({'user_token': 'xyz789'}, domain='example.com')
+session.cookies.set_cookie('key1', 'value1', domain='example.com')
+session.cookies.set_cookie('key2', 'value2', domain='example.com')
 
 # 查看所有 Cookie
 print(session.cookies.get_dict())  # 获取所有 Cookie 的字典
@@ -623,6 +604,37 @@ session.cookies.clear()
 session.close()
 ```
 
+#### 删除 Cookie
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+
+# 设置一些 Cookie
+session.cookies.set_cookie('token', 'abc', domain='example.com')
+session.cookies.set_cookie('token', 'xyz', domain='api.example.com')
+session.cookies.set_cookie('session_id', 'sess1', domain='example.com')
+session.cookies.set_cookie('tracking', 'tr1', domain='example.com')
+
+# 1. 删除指定域名下的指定 Cookie
+session.cookies.delete(name='token', domain='example.com')
+# 只删除 example.com 下的 token，api.example.com 的 token 不受影响
+
+# 2. 删除所有域名下的同名 Cookie
+session.cookies.delete(name='token')
+# 所有域名下叫 token 的 Cookie 全部删除
+
+# 3. 删除某个域名的所有 Cookie
+session.cookies.delete(domain='example.com')
+# example.com 下的所有 Cookie（session_id、tracking 等）全部删除
+
+# 查看剩余 Cookie
+print(session.cookies.get_dict())
+
+session.close()
+```
+
 #### 异步模式下的 Cookie 管理
 
 ```python
@@ -632,7 +644,8 @@ import cycronet
 async def main():
     async with cycronet.AsyncCronetClient(verify=False) as session:
         # 初始化 Cookie
-        session.cookies.update({'session_id': 'abc123'}, domain=example.com')
+        session.cookies.set_cookie('session_id', 'async_session_123', domain='example.com')
+        session.cookies.set_cookie('user_token', 'token_xyz', domain='example.com')
 
         # 发送请求
         response = await session.get('https://example.com')
@@ -777,5 +790,3 @@ asyncio.run(main())
 - **Cloudflare 检测测试**：https://check.torproject.org/
 
 **Cycronet - 真实的 Chrome 指纹，绕过一切检测！** 🚀
-
-

@@ -16,12 +16,16 @@ from ._utils import extract_domain, parse_set_cookie, domain_matches, normalize_
 class AsyncSession:
     """Async Session object - supports async/await"""
 
-    def __init__(self, client: 'AsyncCronetClient', session_id: str, verify: bool = True, headers: Optional[Dict[str, str]] = None):
+    MAX_REDIRECTS = 30  # Same default as requests
+
+    def __init__(self, client: 'AsyncCronetClient', session_id: str, verify: bool = True,
+                 headers: Optional[Dict[str, str]] = None,
+                 default_domain: Optional[str] = None):
         self._client = client
         self._session_id = session_id
         self._closed = False
         self._verify = verify
-        self._cookies = CookieJar()
+        self._cookies = CookieJar(default_domain=default_domain)
         self._default_headers = dict(headers) if headers else {}  # Store default headers for session
 
     @property
@@ -171,11 +175,13 @@ class AsyncSession:
             else:
                 normal_headers.append((k, v))
 
-        # Get matching cookies from CookieJar
-        merged_cookies = {}
-        for cookie in self._cookies:
+        # Get matching cookies from CookieJar (last-write-wins via seq)
+        all_cookies = []
+        for cookie in self._cookies.iter_cookies():
             if not cookie.domain or cookie.domain == domain or domain_matches(cookie.domain, domain):
-                merged_cookies[cookie.name] = cookie.value
+                all_cookies.append(cookie)
+        all_cookies.sort(key=lambda c: c.seq)
+        merged_cookies = {c.name: c.value for c in all_cookies}
 
         if cookies:
             merged_cookies.update(cookies)
@@ -213,7 +219,8 @@ class AsyncSession:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
+        allow_redirects: bool = True,
+        **kwargs
     ) -> Response:
         """Send async HTTP request"""
         if self._closed:
@@ -236,6 +243,11 @@ class AsyncSession:
             url = url + ('&' if '?' in url else '?') + urlencode(params)
 
         domain = extract_domain(url)
+
+        # Auto-detect default domain from first request when none was
+        # supplied at construction time (fulfils the documented behaviour).
+        if not self._cookies.default_domain:
+            self._cookies.set_default_domain(domain)
 
         # Per-request cookies are NOT merged into session (matching requests behavior).
         # They are only used for this single request via _prepare_headers.
@@ -324,6 +336,15 @@ class AsyncSession:
                     break
 
             if location:
+                # Enforce redirect depth limit
+                redirects_remaining = kwargs.get('_redirects_remaining')
+                if redirects_remaining is None:
+                    redirects_remaining = self.MAX_REDIRECTS
+                if redirects_remaining <= 0:
+                    raise RequestError(
+                        f"Exceeded maximum redirects ({self.MAX_REDIRECTS})"
+                    )
+
                 # Handle relative URLs
                 if not location.startswith(('http://', 'https://')):
                     from urllib.parse import urljoin
@@ -344,7 +365,8 @@ class AsyncSession:
                     json=None,
                     timeout=timeout,
                     verify=verify,
-                    allow_redirects=True  # Continue following redirects
+                    allow_redirects=True,  # Continue following redirects
+                    _redirects_remaining=redirects_remaining - 1
                 )
 
         return Response(
