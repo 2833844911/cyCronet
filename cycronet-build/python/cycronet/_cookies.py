@@ -219,11 +219,16 @@ class CookieJar:
                         del self._cookies[d]
 
     def copy(self) -> 'CookieJar':
-        """Return a copy of this CookieJar."""
-        new_jar = CookieJar()
-        for domain, domain_cookies in self._cookies.items():
-            for name, cookie in domain_cookies.items():
-                new_jar.set(name, cookie.value, cookie.domain, cookie.path)
+        """Return a copy of this CookieJar, preserving *default_domain* and
+        the relative write-ordering (seq) of every cookie so that
+        last-write-wins results stay identical to the original.
+        """
+        new_jar = CookieJar(default_domain=self._default_domain or None)
+        # Collect all cookies and replay them in original seq order so the
+        # new jar's monotonic counter mirrors the relative ordering.
+        all_cookies = sorted(self.iter_cookies(), key=lambda c: c.seq)
+        for cookie in all_cookies:
+            new_jar.set(cookie.name, cookie.value, cookie.domain, cookie.path)
         return new_jar
 
     def _deduped(self) -> Dict[str, 'Cookie']:
@@ -259,15 +264,26 @@ class CookieJar:
         return list(self._cookies.keys())
 
     def items_for_domain(self, domain: str) -> Iterator[Tuple[str, str]]:
-        """Yield (name, value) pairs for cookies matching a domain (with RFC 6265 matching).
+        """Yield (name, value) pairs for cookies matching a domain.
+
+        Uses the same matching rules as :meth:`get_dict`: RFC 6265 domain
+        matching **plus** wildcard (empty-domain) cookies, deduped via
+        last-write-wins so the result is consistent with what the session
+        actually sends on the wire.
 
         :param domain: the request domain to match against
         """
         domain = Cookie._normalize_domain(domain)
+        matches = []
         for cookie_domain, domain_cookies in self._cookies.items():
-            if _domain_matches(cookie_domain, domain):
-                for name, cookie in domain_cookies.items():
-                    yield (name, cookie.value)
+            if not cookie_domain or _domain_matches(cookie_domain, domain):
+                matches.extend(domain_cookies.values())
+        matches.sort(key=lambda c: c.seq)
+        seen = {}
+        for c in matches:
+            seen[c.name] = c.value
+        for name, value in seen.items():
+            yield (name, value)
 
     def __setitem__(self, name: str, value: str):
         """Allow jar[name] = value syntax (sets with empty domain)."""

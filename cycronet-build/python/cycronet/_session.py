@@ -16,6 +16,8 @@ from ._utils import extract_domain, parse_set_cookie, domain_matches, normalize_
 class Session:
     """Session object - compatible with requests.Session"""
 
+    MAX_REDIRECTS = 30  # Same default as requests
+
     def __init__(self, client: 'CronetClient', session_id: str, verify: bool = True,
                  default_domain: Optional[str] = None):
         self._client = client
@@ -232,7 +234,8 @@ class Session:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
+        allow_redirects: bool = True,
+        **kwargs
     ) -> Response:
         """Send HTTP request - compatible with requests.request()"""
         if self._closed:
@@ -258,6 +261,11 @@ class Session:
             url = url + ('&' if '?' in url else '?') + urlencode(params)
 
         domain = extract_domain(url)
+
+        # Auto-detect default domain from first request when none was
+        # supplied at construction time (fulfils the documented behaviour).
+        if not self._cookies.default_domain:
+            self._cookies.set_default_domain(domain)
 
         # Per-request cookies are NOT merged into session (matching requests behavior).
         # They are only used for this single request via _prepare_headers.
@@ -346,6 +354,15 @@ class Session:
                     break
 
             if location:
+                # Enforce redirect depth limit
+                redirects_remaining = kwargs.get('_redirects_remaining')
+                if redirects_remaining is None:
+                    redirects_remaining = self.MAX_REDIRECTS
+                if redirects_remaining <= 0:
+                    raise RequestError(
+                        f"Exceeded maximum redirects ({self.MAX_REDIRECTS})"
+                    )
+
                 # Handle relative URLs
                 if not location.startswith(('http://', 'https://')):
                     from urllib.parse import urljoin
@@ -367,7 +384,8 @@ class Session:
                     json=None,
                     timeout=timeout,
                     verify=verify,
-                    allow_redirects=True  # Continue following redirects
+                    allow_redirects=True,  # Continue following redirects
+                    _redirects_remaining=redirects_remaining - 1
                 )
 
         return Response(
