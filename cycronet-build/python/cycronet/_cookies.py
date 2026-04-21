@@ -9,11 +9,16 @@ from typing import Dict, Optional, Union, Iterator, Tuple
 class Cookie:
     """Single Cookie object - similar to http.cookiejar.Cookie"""
 
-    def __init__(self, name: str, value: str, domain: str = "", path: str = "/"):
+    def __init__(self, name: str, value: str, domain: str = "", path: str = "/",
+                 seq: int = 0):
         self.name = name
         self.value = value
         self.domain = self._normalize_domain(domain)
         self.path = path or "/"
+        # Monotonic write sequence — used for last-write-wins dedup when
+        # several cookies with the same name coexist across domain buckets
+        # (matches requests / browser behaviour of "newest write wins").
+        self.seq = seq
 
     @staticmethod
     def _normalize_domain(domain: str) -> str:
@@ -53,75 +58,120 @@ class CookieJar:
 
     Storage: {domain: {name: Cookie}}
     Domain matching follows RFC 6265 rules.
+
+    Supports an optional *default_domain* — when set, calls like
+    ``set(name, value)`` or ``update(dict)`` that omit a domain will store
+    cookies under the default domain instead of the empty (wildcard) bucket.
+    The session wires this automatically from its ``base_url`` or the first
+    outgoing request's host, so callers do not need to pass ``domain=`` every
+    time for single-host clients.
     """
 
-    def __init__(self):
+    def __init__(self, default_domain: Optional[str] = None):
         self._cookies: Dict[str, Dict[str, Cookie]] = {}
+        self._default_domain: str = Cookie._normalize_domain(default_domain or "")
+        self._seq_counter: int = 0
+
+    def _next_seq(self) -> int:
+        self._seq_counter += 1
+        return self._seq_counter
+
+    @property
+    def default_domain(self) -> str:
+        """Default domain used when a cookie is set/updated without an explicit domain."""
+        return self._default_domain
+
+    def set_default_domain(self, domain: Optional[str]) -> None:
+        """Set (or clear, if falsy) the default domain used by subsequent writes."""
+        self._default_domain = Cookie._normalize_domain(domain or "")
 
     def set(self, name: str, value: str, domain: Optional[str] = None, path: str = "/"):
         """Set a cookie.
 
         :param name: cookie name
         :param value: cookie value
-        :param domain: cookie domain (auto-normalized), defaults to None (stored as "")
+        :param domain: cookie domain (auto-normalized). If ``None`` or empty,
+            falls back to :attr:`default_domain`; if that is also empty the
+            cookie is stored in the wildcard bucket (sent on every request).
         :param path: cookie path, defaults to "/"
         """
-        domain = Cookie._normalize_domain(domain or "")
-        if domain not in self._cookies:
-            self._cookies[domain] = {}
-        self._cookies[domain][name] = Cookie(name, value, domain, path)
+        effective = domain if domain else self._default_domain
+        effective = Cookie._normalize_domain(effective or "")
+        if effective not in self._cookies:
+            self._cookies[effective] = {}
+        self._cookies[effective][name] = Cookie(
+            name, value, effective, path, seq=self._next_seq()
+        )
 
     def get(self, name: str, default: Optional[str] = None, domain: Optional[str] = None) -> Optional[str]:
         """Get cookie value by name.
 
-        If domain is specified, only look in that domain (with domain matching).
-        If domain is None, search all domains.
+        If *domain* is specified, restricts the search to cookies whose
+        domain matches (RFC 6265) — including wildcard cookies, which the
+        request layer sends to every host.
+
+        When multiple cookies with the same *name* match, the most recently
+        written value wins (last-write-wins), so the result stays consistent
+        with ``get_dict`` and with the Cookie header actually sent by the
+        session.
 
         :param name: cookie name
         :param default: default value if not found
         :param domain: optional domain filter
         :return: cookie value or default
         """
+        candidates = []
         if domain is not None:
-            domain = Cookie._normalize_domain(domain)
-            # Try exact match first
-            if domain in self._cookies and name in self._cookies[domain]:
-                return self._cookies[domain][name].value
-            # Try domain matching (e.g., request "sub.example.com" matches cookie "example.com")
+            domain_norm = Cookie._normalize_domain(domain)
             for cookie_domain, domain_cookies in self._cookies.items():
-                if name in domain_cookies and _domain_matches(cookie_domain, domain):
-                    return domain_cookies[name].value
+                if name in domain_cookies and (
+                    not cookie_domain or _domain_matches(cookie_domain, domain_norm)
+                ):
+                    candidates.append(domain_cookies[name])
+        else:
+            for domain_cookies in self._cookies.values():
+                if name in domain_cookies:
+                    candidates.append(domain_cookies[name])
+        if not candidates:
             return default
-        # No domain: search all
-        for domain_cookies in self._cookies.values():
-            if name in domain_cookies:
-                return domain_cookies[name].value
-        return default
+        return max(candidates, key=lambda c: c.seq).value
 
     def get_dict(self, domain: Optional[str] = None) -> Dict[str, str]:
         """Get cookies as {name: value} dict.
 
-        If domain is specified, returns cookies that would be sent to that domain
-        (using RFC 6265 domain matching). This means a cookie for "example.com"
-        will be included when querying "sub.example.com".
+        If *domain* is specified, returns cookies that would be sent to that
+        domain using RFC 6265 matching. Wildcard (empty-domain) cookies —
+        which the request layer treats as "send to every host" — are also
+        included, so the result matches what actually goes on the wire.
 
-        If domain is None, returns ALL cookies.
+        When several cookies share a name across different domain buckets
+        (e.g. a wildcard ``_abck`` plus a host-scoped ``_abck`` written by a
+        later Set-Cookie), **the most recently written value wins** — the
+        same "last-write-wins" rule the request layer uses when building
+        the Cookie header. This mirrors ``requests`` / browser behaviour and
+        keeps ``session.cookies.update(fresh_ck)`` authoritative over stale
+        response-scoped copies.
+
+        If *domain* is None, returns ALL cookies (wildcard included), still
+        deduped last-write-wins.
 
         :param domain: optional domain filter (the request domain to match against)
         :return: dict of {cookie_name: cookie_value}
         """
-        result = {}
+        matches = []  # list of Cookie objects that pass the domain filter
         if domain is not None:
             domain = Cookie._normalize_domain(domain)
             for cookie_domain, domain_cookies in self._cookies.items():
-                if _domain_matches(cookie_domain, domain):
-                    for name, cookie in domain_cookies.items():
-                        result[name] = cookie.value
+                if not cookie_domain or _domain_matches(cookie_domain, domain):
+                    matches.extend(domain_cookies.values())
         else:
             for domain_cookies in self._cookies.values():
-                for name, cookie in domain_cookies.items():
-                    result[name] = cookie.value
-        return result
+                matches.extend(domain_cookies.values())
+
+        # Sort by write sequence ascending so dict-overwrite yields the
+        # newest write for each name.
+        matches.sort(key=lambda c: c.seq)
+        return {c.name: c.value for c in matches}
 
     def update(self, cookies: Union[Dict[str, str], 'CookieJar'], domain: Optional[str] = None):
         """Update cookies from dict or another CookieJar.
@@ -176,23 +226,33 @@ class CookieJar:
                 new_jar.set(name, cookie.value, cookie.domain, cookie.path)
         return new_jar
 
-    def items(self) -> Iterator[Tuple[str, str]]:
-        """Yield all (name, value) pairs."""
+    def _deduped(self) -> Dict[str, 'Cookie']:
+        """Return {name: Cookie} resolving same-name collisions via last-write-wins."""
+        latest: Dict[str, 'Cookie'] = {}
         for domain_cookies in self._cookies.values():
             for name, cookie in domain_cookies.items():
-                yield (name, cookie.value)
+                prev = latest.get(name)
+                if prev is None or cookie.seq > prev.seq:
+                    latest[name] = cookie
+        return latest
+
+    def items(self) -> Iterator[Tuple[str, str]]:
+        """Yield (name, value) pairs, deduped by last-write-wins — matches
+        ``requests.Session().cookies.items()`` so ``dict(jar)`` and
+        ``get_dict()`` agree.
+        """
+        for name, cookie in self._deduped().items():
+            yield (name, cookie.value)
 
     def keys(self) -> Iterator[str]:
-        """Yield all cookie names."""
-        for domain_cookies in self._cookies.values():
-            for name in domain_cookies.keys():
-                yield name
+        """Yield all cookie names (deduped)."""
+        for name in self._deduped().keys():
+            yield name
 
     def values(self) -> Iterator[str]:
-        """Yield all cookie values."""
-        for domain_cookies in self._cookies.values():
-            for cookie in domain_cookies.values():
-                yield cookie.value
+        """Yield cookie values (deduped, last-write-wins)."""
+        for cookie in self._deduped().values():
+            yield cookie.value
 
     def list_domains(self) -> list:
         """Return list of all domains that have cookies."""
@@ -228,18 +288,32 @@ class CookieJar:
         """Truthiness: True if jar has any cookies."""
         return len(self) > 0
 
-    def __iter__(self) -> Iterator[Cookie]:
-        """Iterate all Cookie objects."""
+    def __iter__(self) -> Iterator[str]:
+        """Iterate cookie **names** (deduped), so the jar behaves like a
+        mapping — ``dict(jar)`` and ``{**jar}`` work the same way they do for
+        ``requests.Session().cookies``. Use :meth:`iter_cookies` if you need
+        the underlying :class:`Cookie` objects (including per-domain bucket
+        duplicates).
+        """
+        return iter(self._deduped().keys())
+
+    def iter_cookies(self) -> Iterator['Cookie']:
+        """Yield every :class:`Cookie` object in the jar — including same-name
+        entries in different domain/path buckets. Use this when you need the
+        raw storage (e.g. for debugging or export).
+        """
         for domain_cookies in self._cookies.values():
             for cookie in domain_cookies.values():
                 yield cookie
 
     def __len__(self) -> int:
-        """Return total cookie count."""
-        return sum(len(domain_cookies) for domain_cookies in self._cookies.values())
+        """Number of distinct cookie names (after last-write-wins dedup), so
+        ``len(jar)`` matches what ``dict(jar)`` produces.
+        """
+        return len(self._deduped())
 
     def __repr__(self):
-        cookies_list = list(self)
+        cookies_list = list(self.iter_cookies())
         if not cookies_list:
             return "<CookieJar[]>"
         cookies_repr = ", ".join(repr(cookie) for cookie in cookies_list)

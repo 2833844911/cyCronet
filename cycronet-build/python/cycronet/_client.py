@@ -163,12 +163,30 @@ def _validate_proxy_url(proxy_url: str) -> None:
         raise RequestError(f"Invalid proxy URL '{proxy_url}': {e}")
 
 
+def _extract_base_url_host(base_url: Optional[str]) -> Optional[str]:
+    """Return the hostname of *base_url*, or None when it is unusable as a
+    cookie default domain (missing, relative, or non-http scheme).
+    """
+    if not base_url:
+        return None
+    try:
+        parsed = urlparse(base_url if "://" in base_url else "http://" + base_url)
+    except ValueError:
+        return None
+    host = parsed.hostname
+    if not host:
+        return None
+    return host
+
+
 def CronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
     chrometls: Optional[str] = "chrome_144",
-    headers: Optional[Dict[str, str]] = None
+    headers: Optional[Dict[str, str]] = None,
+    base_url: Optional[str] = None,
+    default_domain: Optional[str] = None,
 ) -> Session:
     """
     Create Cronet Session - similar to requests.Session()
@@ -179,6 +197,18 @@ def CronetClient(
         timeout_ms: Timeout in milliseconds
         chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
         headers: Default headers for all requests in this session
+        base_url: Optional base URL whose hostname becomes the CookieJar's
+            default domain (host-only, like a browser host cookie — only
+            exact host matches). Use this for single-host sessions.
+        default_domain: Optional explicit default cookie domain. Unlike
+            ``base_url`` this is treated as a RFC 6265 domain attribute, so
+            a value like ``"example.com"`` is also sent to
+            ``sub.example.com``. Use this when the Akamai/SSO cookies need to
+            follow a user across sibling subdomains (e.g. ``www.site.com``
+            and ``booking.site.com`` both need cookies scoped to
+            ``site.com``). Takes precedence over *base_url*.
+            If neither is set, the host of the first outgoing request is
+            used automatically (host-only).
 
     Returns:
         Session object
@@ -188,6 +218,8 @@ def CronetClient(
         session = CronetClient(proxies={"https": "http://127.0.0.1:8080"})
         session = CronetClient(verify=False, chrometls="chrome_144")
         session = CronetClient(headers={"User-Agent": "MyApp/1.0"})
+        session = CronetClient(base_url="https://www.example.com")
+        session = CronetClient(default_domain="example.com")  # cross-subdomain
         response = session.get("https://example.com")
     """
     # Import here to avoid circular dependency
@@ -228,7 +260,8 @@ def CronetClient(
             self._client = client
 
     wrapper = _ClientWrapper(client)
-    session = Session(wrapper, session_id, verify)
+    effective_default = default_domain or _extract_base_url_host(base_url)
+    session = Session(wrapper, session_id, verify, default_domain=effective_default)
     if headers:
         session.headers = headers
     return session
@@ -239,7 +272,9 @@ def AsyncCronetClient(
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
     chrometls: Optional[str] = "chrome_144",
-    headers: Optional[Dict[str, str]] = None
+    headers: Optional[Dict[str, str]] = None,
+    base_url: Optional[str] = None,
+    default_domain: Optional[str] = None,
 ) -> AsyncSession:
     """
     Create async Cronet Session - supports async/await
@@ -250,6 +285,15 @@ def AsyncCronetClient(
         timeout_ms: Timeout in milliseconds
         chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
         headers: Default headers for all requests in this session
+        base_url: Optional base URL whose hostname becomes the CookieJar's
+            default domain (host-only, like a browser host cookie — only
+            exact host matches). Use this for single-host sessions.
+        default_domain: Optional explicit default cookie domain (RFC 6265
+            domain attribute). A value like ``"example.com"`` is also sent
+            to ``sub.example.com``, so use this when cookies need to follow
+            a user across sibling subdomains. Takes precedence over
+            *base_url*. If neither is set, the host of the first outgoing
+            request is used automatically (host-only).
 
     Returns:
         AsyncSession object
@@ -259,6 +303,9 @@ def AsyncCronetClient(
             response = await session.get("https://example.com")
         async with AsyncCronetClient(headers={"User-Agent": "MyApp/1.0"}) as session:
             response = await session.get("https://example.com")
+        async with AsyncCronetClient(default_domain="example.com") as session:
+            session.cookies.update({"token": "abc"})
+            await session.get("https://api.example.com/x")  # cookie sent
     """
     # Import here to avoid circular dependency
     from .cronet_cloak import PyCronetClient
@@ -295,7 +342,8 @@ def AsyncCronetClient(
             self._client = client
 
     wrapper = _ClientWrapper(client)
-    session = AsyncSession(wrapper, session_id, verify)
+    effective_default = default_domain or _extract_base_url_host(base_url)
+    session = AsyncSession(wrapper, session_id, verify, default_domain=effective_default)
     if headers:
         session.headers = headers
     return session
