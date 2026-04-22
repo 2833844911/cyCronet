@@ -350,29 +350,33 @@ class CookieJar:
         """Truthiness: True if jar has any cookies."""
         return len(self) > 0
 
-    def __iter__(self) -> Iterator[str]:
-        """Iterate cookie **names** (deduped), so the jar behaves like a
-        mapping — ``dict(jar)`` and ``{**jar}`` work the same way they do for
-        ``requests.Session().cookies``. Use :meth:`iter_cookies` if you need
-        the underlying :class:`Cookie` objects (including per-domain bucket
-        duplicates).
+    def __iter__(self) -> Iterator['Cookie']:
+        """Iterate over :class:`Cookie` objects — matches
+        ``requests.Session().cookies`` and ``http.cookiejar.CookieJar``, so
+        ``for c in session.cookies: c.name`` works as users expect.
+
+        ``dict(jar)`` / ``{**jar}`` / ``jar[name]`` still produce ``{name:
+        value}`` because they go through the mapping protocol
+        (``keys()`` + ``__getitem__``), which stays deduped last-write-wins.
         """
-        return iter(self._deduped().keys())
+        return self.iter_cookies()
 
     def iter_cookies(self) -> Iterator['Cookie']:
         """Yield every :class:`Cookie` object in the jar — including same-name
-        entries in different domain/path buckets. Use this when you need the
-        raw storage (e.g. for debugging or export).
+        entries in different domain/path buckets. Equivalent to ``iter(jar)``;
+        kept as an explicit alias for call sites that want to make the intent
+        obvious.
         """
         for domain_cookies in self._cookies.values():
             for cookie in domain_cookies.values():
                 yield cookie
 
     def __len__(self) -> int:
-        """Number of distinct cookie names (after last-write-wins dedup), so
-        ``len(jar)`` matches what ``dict(jar)`` produces.
+        """Total number of stored :class:`Cookie` objects — matches
+        ``requests.Session().cookies`` and keeps ``len(list(jar)) == len(jar)``.
+        Use ``len(jar.get_dict())`` if you want the deduped name count.
         """
-        return len(self._deduped())
+        return sum(len(bucket) for bucket in self._cookies.values())
 
     def __repr__(self):
         cookies_list = list(self.iter_cookies())
