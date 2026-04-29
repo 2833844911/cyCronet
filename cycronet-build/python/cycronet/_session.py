@@ -9,7 +9,7 @@ from urllib.parse import urlparse, urlencode
 
 from ._types import HeadersType, CookiesType, DataType
 from ._cookies import CookieJar
-from ._response import Response, HTTPStatusError, RequestError
+from ._response import Response, StreamResponse, HTTPStatusError, RequestError
 from ._utils import extract_domain, parse_set_cookie, domain_matches, normalize_cookie_domain
 
 
@@ -225,8 +225,9 @@ class Session:
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
         allow_redirects: bool = True,
+        stream: bool = False,
         **kwargs
-    ) -> Response:
+    ):
         """Send HTTP request - compatible with requests.request()"""
         if self._closed:
             raise RequestError("Session is closed")
@@ -306,6 +307,68 @@ class Session:
 
         # Always disable redirects at Rust layer, handle in Python
         # Use request_sync for synchronous blocking call
+        # Streaming path
+        if stream:
+            reader = self._client._client.request_stream_sync(
+                self._session_id,
+                url,
+                method.upper(),
+                prepared_headers,
+                body,
+                False  # Always False - handle redirects in Python
+            )
+
+            status_code = reader.status_code
+            resp_headers_list = list(reader.headers)
+
+            resp_headers = {}
+            for name, value in resp_headers_list:
+                if name not in resp_headers:
+                    resp_headers[name] = []
+                resp_headers[name].append(value)
+
+            # Update session cookies from response
+            self._update_cookies_from_response(resp_headers, domain)
+
+            # Create response CookieJar
+            response_cookies = CookieJar()
+            for header_name, values in resp_headers.items():
+                if header_name.lower() == 'set-cookie':
+                    for cookie_name, cookie_value, cookie_domain, cookie_path in parse_set_cookie(values):
+                        store_domain = cookie_domain if cookie_domain else normalize_cookie_domain(domain)
+                        response_cookies.set(cookie_name, cookie_value, store_domain, cookie_path)
+
+            # Handle redirects for streaming
+            if allow_redirects and status_code in (301, 302, 303, 307, 308):
+                location = None
+                for header_name, values in resp_headers.items():
+                    if header_name.lower() == 'location':
+                        location = values[0] if values else None
+                        break
+                if location:
+                    reader.close()
+                    redirects_remaining = kwargs.get('_redirects_remaining')
+                    if redirects_remaining is None:
+                        redirects_remaining = self.MAX_REDIRECTS
+                    if redirects_remaining <= 0:
+                        raise RequestError(f"Exceeded maximum redirects ({self.MAX_REDIRECTS})")
+                    if not location.startswith(('http://', 'https://')):
+                        from urllib.parse import urljoin
+                        location = urljoin(url, location)
+                    redirect_method = 'GET' if status_code == 303 else method
+                    return self.request(
+                        redirect_method, location,
+                        params=None, headers=headers_to_prepare, cookies=cookies,
+                        data=None if status_code == 303 else data, json=None,
+                        timeout=timeout, verify=verify, allow_redirects=True,
+                        stream=True, _redirects_remaining=redirects_remaining - 1
+                    )
+
+            return StreamResponse(
+                reader, url=url, cookies=response_cookies
+            )
+
+        # Non-streaming path
         response_dict = self._client._client.request_sync(
             self._session_id,
             url,
@@ -396,8 +459,9 @@ class Session:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response:
+        allow_redirects: bool = True,
+        stream: bool = False
+    ):
         """Send GET request"""
         return self.request(
             "GET",
@@ -407,7 +471,8 @@ class Session:
             cookies=cookies,
             timeout=timeout,
             verify=verify,
-            allow_redirects=allow_redirects
+            allow_redirects=allow_redirects,
+            stream=stream
         )
 
     def post(
@@ -421,8 +486,9 @@ class Session:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response:
+        allow_redirects: bool = True,
+        stream: bool = False
+    ):
         """Send POST request"""
         return self.request(
             "POST",
@@ -434,7 +500,8 @@ class Session:
             json=json,
             timeout=timeout,
             verify=verify,
-            allow_redirects=allow_redirects
+            allow_redirects=allow_redirects,
+            stream=stream
         )
 
     def put(
@@ -448,8 +515,9 @@ class Session:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response:
+        allow_redirects: bool = True,
+        stream: bool = False
+    ):
         """Send PUT request"""
         return self.request(
             "PUT",
@@ -461,7 +529,8 @@ class Session:
             json=json,
             timeout=timeout,
             verify=verify,
-            allow_redirects=allow_redirects
+            allow_redirects=allow_redirects,
+            stream=stream
         )
 
     def delete(
@@ -473,8 +542,9 @@ class Session:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response:
+        allow_redirects: bool = True,
+        stream: bool = False
+    ):
         """Send DELETE request"""
         return self.request(
             "DELETE",
@@ -484,7 +554,8 @@ class Session:
             cookies=cookies,
             timeout=timeout,
             verify=verify,
-            allow_redirects=allow_redirects
+            allow_redirects=allow_redirects,
+            stream=stream
         )
 
     def patch(
@@ -498,8 +569,9 @@ class Session:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response:
+        allow_redirects: bool = True,
+        stream: bool = False
+    ):
         """Send PATCH request"""
         return self.request(
             "PATCH",
@@ -511,7 +583,8 @@ class Session:
             json=json,
             timeout=timeout,
             verify=verify,
-            allow_redirects=allow_redirects
+            allow_redirects=allow_redirects,
+            stream=stream
         )
 
     def head(
@@ -523,8 +596,9 @@ class Session:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response:
+        allow_redirects: bool = True,
+        stream: bool = False
+    ):
         """Send HEAD request"""
         return self.request(
             "HEAD",
@@ -534,7 +608,8 @@ class Session:
             cookies=cookies,
             timeout=timeout,
             verify=verify,
-            allow_redirects=allow_redirects
+            allow_redirects=allow_redirects,
+            stream=stream
         )
 
     def options(
@@ -546,8 +621,9 @@ class Session:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response:
+        allow_redirects: bool = True,
+        stream: bool = False
+    ):
         """Send OPTIONS request"""
         return self.request(
             "OPTIONS",
@@ -557,7 +633,8 @@ class Session:
             cookies=cookies,
             timeout=timeout,
             verify=verify,
-            allow_redirects=allow_redirects
+            allow_redirects=allow_redirects,
+            stream=stream
         )
 
     def upload_file(

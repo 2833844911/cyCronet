@@ -6,7 +6,7 @@ use std::ffi::{c_void, CStr, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, mpsc};
 
 // Macro for verbose logging
 macro_rules! verbose_log {
@@ -217,6 +217,8 @@ impl CronetEngine {
                 allow_redirects: true,  // 默认允许重定向（REST API）
                 redirect_response: Mutex::new(None),
                 context_taken: AtomicBool::new(false),
+                is_streaming: false,
+                stream_tx: Mutex::new(None),
             });
 
             let context_ptr = Box::into_raw(context);
@@ -384,6 +386,22 @@ pub struct RequestResult {
     pub body: Vec<u8>,
 }
 
+/// 流式响应数据块
+#[derive(Debug)]
+pub enum StreamChunk {
+    /// 响应头（首个块）
+    Headers {
+        status_code: i32,
+        headers: Vec<(String, String)>,
+    },
+    /// 响应体数据块
+    Data(Vec<u8>),
+    /// 请求完成
+    Done,
+    /// 错误
+    Error(String),
+}
+
 #[allow(dead_code)]
 pub struct CronetRequest {
     ptr: Cronet_UrlRequestPtr,
@@ -467,6 +485,9 @@ struct RequestContext {
     allow_redirects: bool,  // 是否允许重定向（只读，不需要锁）
     redirect_response: Mutex<Option<RequestResult>>,  // 存储重定向响应（当 allow_redirects=false 时）
     context_taken: AtomicBool,  // 防止双重释放：标记 context 是否已被取走
+    // 流式响应
+    is_streaming: bool,
+    stream_tx: Mutex<Option<mpsc::UnboundedSender<StreamChunk>>>,
 }
 
 // Executor 专用 context - 独立于 RequestContext，避免 use-after-free
@@ -610,6 +631,23 @@ unsafe extern "C" fn on_response_started(
         }
     }
 
+    // 流式模式：发送 Headers 块
+    if context.is_streaming {
+        let status_code = context.status_code.load(Ordering::Acquire);
+        let headers = match context.response_headers.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => {
+                eprintln!("[WARN] on_response_started: response_headers mutex poisoned for streaming");
+                poisoned.into_inner().clone()
+            }
+        };
+        if let Ok(guard) = context.stream_tx.lock() {
+            if let Some(ref tx) = *guard {
+                let _ = tx.send(StreamChunk::Headers { status_code, headers });
+            }
+        }
+    }
+
     let buffer_ptr = Cronet_Buffer_Create();
     Cronet_Buffer_InitWithAlloc(buffer_ptr, 32 * 1024);
 
@@ -630,15 +668,24 @@ unsafe extern "C" fn on_read_completed(
     let data_ptr = Cronet_Buffer_GetData(buffer);
     let slice = std::slice::from_raw_parts(data_ptr as *const u8, bytes_read as usize);
 
-    // 使用锁保护 response_buffer，处理 poisoned
-    match context.response_buffer.lock() {
-        Ok(mut response_buffer) => {
-            response_buffer.extend_from_slice(slice);
+    if context.is_streaming {
+        // 流式模式：直接发送数据块
+        if let Ok(guard) = context.stream_tx.lock() {
+            if let Some(ref tx) = *guard {
+                let _ = tx.send(StreamChunk::Data(slice.to_vec()));
+            }
         }
-        Err(poisoned) => {
-            eprintln!("[WARN] on_read_completed: Mutex poisoned, recovering");
-            let mut response_buffer = poisoned.into_inner();
-            response_buffer.extend_from_slice(slice);
+    } else {
+        // 非流式模式：缓冲数据
+        match context.response_buffer.lock() {
+            Ok(mut response_buffer) => {
+                response_buffer.extend_from_slice(slice);
+            }
+            Err(poisoned) => {
+                eprintln!("[WARN] on_read_completed: Mutex poisoned, recovering");
+                let mut response_buffer = poisoned.into_inner();
+                response_buffer.extend_from_slice(slice);
+            }
         }
     }
 
@@ -696,6 +743,31 @@ unsafe extern "C" fn on_canceled(
     // 减少活跃请求计数
     if let Some(ref active_requests) = context.active_requests {
         active_requests.fetch_sub(1, Ordering::Release);
+    }
+
+    // 流式模式：发送错误或重定向响应
+    if context.is_streaming {
+        let redirect_response = match context.redirect_response.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        let stream_tx = match context.stream_tx.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(tx) = stream_tx {
+            if let Some(redirect) = redirect_response {
+                // 重定向响应：发送 Headers 然后 Done
+                let _ = tx.send(StreamChunk::Headers {
+                    status_code: redirect.status_code,
+                    headers: redirect.headers,
+                });
+                let _ = tx.send(StreamChunk::Done);
+            } else {
+                let _ = tx.send(StreamChunk::Error("Canceled".to_string()));
+            }
+        }
+        return;
     }
 
     // 检查是否有保存的重定向响应（allow_redirects=false 的情况）
@@ -757,6 +829,21 @@ unsafe fn complete_request(callback_ptr: Cronet_UrlRequestCallbackPtr, result: R
     }
 
     verbose_log!("[DEBUG] complete_request: {:?}", result);
+
+    // 流式模式：发送 Done 或 Error
+    if context.is_streaming {
+        let stream_tx = match context.stream_tx.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(tx) = stream_tx {
+            match result {
+                Ok(_) => { let _ = tx.send(StreamChunk::Done); }
+                Err(e) => { let _ = tx.send(StreamChunk::Error(e)); }
+            }
+        }
+        return;
+    }
 
     let tx = match context.tx.lock() {
         Ok(mut guard) => guard.take(),
@@ -1105,9 +1192,49 @@ impl SessionManager {
             Some(session.in_flight_executors.clone()),
             Some(session.pending_requests.clone()),
             allow_redirects,
+            None,
         );
 
         Some((request, rx, session.config.timeout_ms))
+    }
+
+    /// 使用会话发送流式请求
+    /// 返回 (CronetRequest, mpsc::UnboundedReceiver<StreamChunk>, timeout_ms)
+    pub fn send_request_stream(
+        &self,
+        session_id: &str,
+        target: &crate::cronet_pb::TargetRequest,
+        allow_redirects: bool,
+    ) -> Option<(CronetRequest, mpsc::UnboundedReceiver<StreamChunk>, u64)> {
+        let sessions = match self.sessions.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                eprintln!("[WARN] send_request_stream: RwLock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        let session = sessions.get(session_id)?;
+
+        if session.is_closed.load(Ordering::Acquire) {
+            eprintln!("[WARN] Session {} is closed, rejecting stream request", session_id);
+            return None;
+        }
+
+        session.active_requests.fetch_add(1, Ordering::Acquire);
+
+        let (stream_tx, stream_rx) = mpsc::unbounded_channel();
+
+        let (request, _rx) = Self::start_request_with_engine(
+            session.engine_ptr,
+            target,
+            Some(session.active_requests.clone()),
+            Some(session.in_flight_executors.clone()),
+            Some(session.pending_requests.clone()),
+            allow_redirects,
+            Some(stream_tx),
+        );
+
+        Some((request, stream_rx, session.config.timeout_ms))
     }
 
     /// 使用指定的 engine 发送请求
@@ -1118,6 +1245,7 @@ impl SessionManager {
         in_flight_executors: Option<Arc<AtomicUsize>>,
         pending_requests: Option<Arc<Mutex<Vec<Cronet_UrlRequestPtr>>>>,
         allow_redirects: bool,
+        stream_sender: Option<mpsc::UnboundedSender<StreamChunk>>,
     ) -> (CronetRequest, oneshot::Receiver<Result<RequestResult, String>>) {
         unsafe {
             let (tx, rx) = oneshot::channel();
@@ -1125,8 +1253,9 @@ impl SessionManager {
             // 创建完成标志
             let completed = Arc::new(AtomicBool::new(false));
 
+            let is_streaming = stream_sender.is_some();
             let context = Box::new(RequestContext {
-                tx: Mutex::new(Some(tx)),
+                tx: Mutex::new(if is_streaming { None } else { Some(tx) }),
                 response_buffer: Mutex::new(Vec::new()),
                 response_headers: Mutex::new(Vec::new()),
                 status_code: AtomicI32::new(0),
@@ -1135,6 +1264,8 @@ impl SessionManager {
                 allow_redirects,
                 redirect_response: Mutex::new(None),
                 context_taken: AtomicBool::new(false),
+                is_streaming,
+                stream_tx: Mutex::new(stream_sender),
             });
             let context_ptr = Box::into_raw(context);
 

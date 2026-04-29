@@ -57,7 +57,7 @@ except ImportError as e:
 # Import public API
 from ._types import HeadersType, CookiesType, DataType
 from ._cookies import Cookie, CookieJar
-from ._response import Response, HTTPStatusError, RequestError
+from ._response import Response, StreamResponse, HTTPStatusError, RequestError
 from ._session import Session
 from ._async_session import AsyncSession
 from ._client import (
@@ -75,7 +75,7 @@ from ._api_async import (
 )
 
 __all__ = [
-    "CronetClient", "Session", "Response", "HTTPStatusError", "RequestError",
+    "CronetClient", "Session", "Response", "StreamResponse", "HTTPStatusError", "RequestError",
     "Cookie", "CookieJar",
     "get", "post", "put", "delete", "patch", "head", "options",
     "upload_file", "download_file",

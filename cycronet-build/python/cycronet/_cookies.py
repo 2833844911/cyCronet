@@ -1,5 +1,6 @@
 """
 Cookie management classes for cycronet.
+Designed to match requests.cookies.RequestsCookieJar behavior.
 """
 
 from typing import Dict, Iterator, Optional, Tuple, Union
@@ -41,6 +42,9 @@ class CookieJar:
     Supports an optional *default_domain* — when set, calls like
     ``set(name, value)`` or ``update(dict)`` that omit a domain will store
     cookies under the default domain instead of the empty (wildcard) bucket.
+    The session wires this automatically from its ``base_url`` or the first
+    outgoing request's host, so callers do not need to pass ``domain=`` every
+    time for single-host clients.
     """
 
     def __init__(self, default_domain: Optional[str] = None):
@@ -84,10 +88,13 @@ class CookieJar:
         """Get cookie value by name.
 
         If *domain* is specified, restricts the search to cookies whose
-        domain matches (RFC 6265) — including wildcard cookies.
+        domain matches (RFC 6265) — including wildcard cookies, which the
+        request layer sends to every host.
 
         When multiple cookies with the same *name* match, the most recently
-        written value wins (last-write-wins).
+        written value wins (last-write-wins), so the result stays consistent
+        with ``get_dict`` and with the Cookie header actually sent by the
+        session.
 
         :param name: cookie name
         :param default: default value if not found
@@ -114,18 +121,25 @@ class CookieJar:
         """Get cookies as {name: value} dict.
 
         If *domain* is specified, returns cookies that would be sent to that
-        domain using RFC 6265 matching. Wildcard (empty-domain) cookies are
-        also included, so the result matches what actually goes on the wire.
+        domain using RFC 6265 matching. Wildcard (empty-domain) cookies —
+        which the request layer treats as "send to every host" — are also
+        included, so the result matches what actually goes on the wire.
 
-        When several cookies share a name across different domain buckets,
-        **the most recently written value wins** (last-write-wins).
+        When several cookies share a name across different domain buckets
+        (e.g. a wildcard ``_abck`` plus a host-scoped ``_abck`` written by a
+        later Set-Cookie), **the most recently written value wins** — the
+        same "last-write-wins" rule the request layer uses when building
+        the Cookie header. This mirrors ``requests`` / browser behaviour and
+        keeps ``session.cookies.update(fresh_ck)`` authoritative over stale
+        response-scoped copies.
 
-        If *domain* is None, returns ALL cookies, still deduped last-write-wins.
+        If *domain* is None, returns ALL cookies (wildcard included), still
+        deduped last-write-wins.
 
         :param domain: optional domain filter (the request domain to match against)
         :return: dict of {cookie_name: cookie_value}
         """
-        matches = []
+        matches = []  # list of Cookie objects that pass the domain filter
         if domain is not None:
             domain = Cookie._normalize_domain(domain)
             for cookie_domain, domain_cookies in self._cookies.items():
@@ -255,7 +269,10 @@ class CookieJar:
         return latest
 
     def items(self) -> Iterator[Tuple[str, str]]:
-        """Yield (name, value) pairs, deduped by last-write-wins."""
+        """Yield (name, value) pairs, deduped by last-write-wins — matches
+        ``requests.Session().cookies.items()`` so ``dict(jar)`` and
+        ``get_dict()`` agree.
+        """
         for name, cookie in self._deduped().items():
             yield (name, cookie.value)
 
@@ -314,25 +331,33 @@ class CookieJar:
         """Truthiness: True if jar has any cookies."""
         return len(self) > 0
 
-    def __iter__(self) -> Iterator[str]:
-        """Iterate cookie **names** (deduped), so the jar behaves like a
-        mapping — ``dict(jar)`` works the same way as for
-        ``requests.Session().cookies``. Use :meth:`iter_cookies` if you need
-        the underlying :class:`Cookie` objects.
+    def __iter__(self) -> Iterator['Cookie']:
+        """Iterate over :class:`Cookie` objects — matches
+        ``requests.Session().cookies`` and ``http.cookiejar.CookieJar``, so
+        ``for c in session.cookies: c.name`` works as users expect.
+
+        ``dict(jar)`` / ``{**jar}`` / ``jar[name]`` still produce ``{name:
+        value}`` because they go through the mapping protocol
+        (``keys()`` + ``__getitem__``), which stays deduped last-write-wins.
         """
-        return iter(self._deduped().keys())
+        return self.iter_cookies()
 
     def iter_cookies(self) -> Iterator['Cookie']:
         """Yield every :class:`Cookie` object in the jar — including same-name
-        entries in different domain/path buckets.
+        entries in different domain/path buckets. Equivalent to ``iter(jar)``;
+        kept as an explicit alias for call sites that want to make the intent
+        obvious.
         """
         for domain_cookies in self._cookies.values():
             for cookie in domain_cookies.values():
                 yield cookie
 
     def __len__(self) -> int:
-        """Number of distinct cookie names (after last-write-wins dedup)."""
-        return len(self._deduped())
+        """Total number of stored :class:`Cookie` objects — matches
+        ``requests.Session().cookies`` and keeps ``len(list(jar)) == len(jar)``.
+        Use ``len(jar.get_dict())`` if you want the deduped name count.
+        """
+        return sum(len(bucket) for bucket in self._cookies.values())
 
     def __repr__(self):
         cookies_list = list(self.iter_cookies())
