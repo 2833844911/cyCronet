@@ -173,7 +173,7 @@ class StreamResponse:
                     yield buf[:chunk_size]
                     buf = buf[chunk_size:]
 
-    def iter_lines(self, chunk_size: int = 512, delimiter: Optional[str] = None):
+    def iter_lines(self, chunk_size: int = 512, decode_unicode: bool = True, delimiter: Optional[str] = None):
         """Iterate over response lines (sync generator).
 
         Args:
