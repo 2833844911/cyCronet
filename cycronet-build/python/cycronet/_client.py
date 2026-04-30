@@ -143,7 +143,7 @@ def _validate_proxy_url(proxy_url: str) -> None:
         raise RequestError(f"Invalid proxy URL '{proxy_url}': No schema supplied")
 
     # Supported proxy protocols
-    supported_schemes = ('http', 'https', 'socks5')
+    supported_schemes = ('http', 'https', 'socks5', 'socks5h')
     if parsed.scheme not in supported_schemes:
         raise RequestError(
             f"Invalid proxy URL '{proxy_url}': Unsupported schema '{parsed.scheme}'. "
@@ -237,6 +237,9 @@ def CronetClient(
         # Validate proxy URL
         if proxy_rules:
             _validate_proxy_url(proxy_rules)
+            # Normalize socks5h -> socks5 (Cronet SOCKS5 always uses remote DNS)
+            if proxy_rules.startswith('socks5h://'):
+                proxy_rules = 'socks5://' + proxy_rules[len('socks5h://'):]
 
     # Load TLS fingerprint configuration
     tls_profile = _load_tls_profile(chrometls)
@@ -320,6 +323,9 @@ def AsyncCronetClient(
         # Validate proxy URL
         if proxy_rules:
             _validate_proxy_url(proxy_rules)
+            # Normalize socks5h -> socks5 (Cronet SOCKS5 always uses remote DNS)
+            if proxy_rules.startswith('socks5h://'):
+                proxy_rules = 'socks5://' + proxy_rules[len('socks5h://'):]
 
     # Load TLS fingerprint configuration
     tls_profile = _load_tls_profile(chrometls)

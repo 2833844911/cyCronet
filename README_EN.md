@@ -13,6 +13,8 @@ The ultimate solution for browser request protocol fingerprint detection - this 
 - 🔄 Same user experience as aiohttp/httpx
 - 🎯 Authentic Chrome TLS/HTTP2 fingerprints (both sync and async)
 - 🔐 **Custom TLS fingerprint configuration (NEW!)**
+- 🔌 **SOCKS5 proxy with username/password authentication (NEW!)**
+- 📡 **Streaming response support (NEW!)**
 
 ### Why Cycronet?
 
@@ -45,9 +47,8 @@ Cycronet directly uses Chromium's Cronet network library, producing network char
 ```bash
 pip install cycronet
 ```
-- Currently supports macOS ARM64, Linux (glibc 2.18+), Windows 64-bit
-- Proxy support: HTTP, HTTPS, SOCKS5 (without authentication)
-- For SOCKS5 with authentication, use pproxy to convert to HTTP: `pip install pproxy` then `pproxy -l http://127.0.0.1:8118 -r socks5://user:pass@remote:1080`
+- Currently supports macOS ARM64, Linux (glibc 2.18+), Windows 64-bit, Windows 32-bit
+- Proxy support: HTTP, HTTPS, SOCKS5, SOCKS5h (all with authentication support)
 
 
 ## 🔐 TLS/HTTP2 Fingerprint Bypass
@@ -474,7 +475,6 @@ session = cycronet.CronetClient(
     proxies={"https": "http://127.0.0.1:8080"}
 )
 
-
 # Proxy with authentication
 session = cycronet.CronetClient(
     verify=False,
@@ -486,6 +486,182 @@ print(response.json())
 session.close()
 ```
 
+### SOCKS5 Proxy (with Authentication)
+
+Cycronet natively supports SOCKS5 proxies, including username/password authentication, with no extra dependencies.
+
+```python
+import cycronet
+
+# SOCKS5 proxy (no auth)
+response = cycronet.get(
+    'https://httpbin.org/ip',
+    proxies='socks5://127.0.0.1:1080',
+    verify=False
+)
+
+# SOCKS5 proxy (with username/password)
+response = cycronet.get(
+    'https://httpbin.org/ip',
+    proxies='socks5://username:password@127.0.0.1:1080',
+    verify=False
+)
+print(response.json())  # {"origin": "proxy IP"}
+
+# socks5h mode (DNS resolved by proxy, equivalent to socks5)
+response = cycronet.get(
+    'https://httpbin.org/ip',
+    proxies='socks5h://username:password@127.0.0.1:1080',
+    verify=False
+)
+
+# Dict format
+proxies = {
+    'http': 'socks5://username:password@127.0.0.1:1080',
+    'https': 'socks5://username:password@127.0.0.1:1080'
+}
+response = cycronet.get('https://httpbin.org/ip', proxies=proxies, verify=False)
+```
+
+**Using SOCKS5 with Sessions:**
+
+```python
+import cycronet
+
+# Sync Session
+with cycronet.CronetClient(
+    verify=False,
+    proxies='socks5://username:password@127.0.0.1:1080'
+) as session:
+    r1 = session.get('https://httpbin.org/ip')
+    r2 = session.get('https://httpbin.org/get')  # Connection reuse, H2 multiplexing
+    print(r1.json(), r2.json())
+
+# Async Session
+import asyncio
+
+async def main():
+    async with cycronet.AsyncCronetClient(
+        verify=False,
+        proxies='socks5://username:password@127.0.0.1:1080'
+    ) as session:
+        response = await session.get('https://httpbin.org/ip')
+        print(response.json())
+
+asyncio.run(main())
+```
+
+**Supported Proxy Protocols:**
+
+| Protocol | Format | Authentication |
+|----------|--------|----------------|
+| HTTP | `http://host:port` | ✅ Supported |
+| HTTPS | `https://host:port` | ✅ Supported |
+| SOCKS5 | `socks5://host:port` | ✅ Supported |
+| SOCKS5h | `socks5h://host:port` | ✅ Supported |
+
+> **Note**: Cronet's SOCKS5 implementation uses remote DNS resolution by default (equivalent to `socks5h`), so `socks5://` and `socks5h://` behave identically.
+
+## 📡 Streaming Response
+
+Cycronet supports streaming response data, ideal for large file downloads, SSE (Server-Sent Events), and chunked data processing.
+
+### Basic Streaming
+
+```python
+import cycronet
+
+# Enable streaming with stream=True
+response = cycronet.get('https://httpbin.org/stream/5', stream=True, verify=False)
+print(f"Status: {response.status_code}")
+
+# Iterate by lines
+for line in response.iter_lines():
+    print(line)
+
+response.close()
+```
+
+### Chunked Reading (Large File Download)
+
+```python
+import cycronet
+
+response = cycronet.get('https://example.com/large-file.zip', stream=True, verify=False)
+
+with open('output.zip', 'wb') as f:
+    for chunk in response.iter_content(chunk_size=8192):
+        f.write(chunk)
+
+response.close()
+```
+
+### Using Context Manager (Auto-close)
+
+```python
+import cycronet
+
+with cycronet.CronetClient(verify=False) as session:
+    response = session.get('https://httpbin.org/stream/3', stream=True)
+
+    with response:
+        for line in response.iter_lines():
+            print(line)
+```
+
+### StreamResponse Convenience Properties
+
+StreamResponse also supports direct access to full response content (automatically consumes the entire stream):
+
+```python
+import cycronet
+
+response = cycronet.get('https://httpbin.org/get', stream=True, verify=False)
+
+# Access full content directly
+print(response.text)       # Text content
+print(response.content)    # Raw bytes
+print(response.json())     # JSON parsed
+```
+
+### Async Streaming
+
+```python
+import asyncio
+import cycronet
+
+async def stream_data():
+    response = await cycronet.async_get(
+        'https://httpbin.org/stream/5',
+        stream=True, verify=False
+    )
+
+    # Async line iteration
+    async for line in response.aiter_lines():
+        print(line)
+
+    response.close()
+
+asyncio.run(stream_data())
+```
+
+### Streaming + SOCKS5 Proxy
+
+```python
+import cycronet
+
+response = cycronet.get(
+    'https://httpbin.org/stream/3',
+    proxies='socks5://username:password@127.0.0.1:1080',
+    stream=True,
+    verify=False
+)
+
+for line in response.iter_lines():
+    print(line)
+
+response.close()
+```
 
 ## 🔧 Advanced Configuration
 

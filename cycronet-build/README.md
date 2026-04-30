@@ -1,14 +1,8 @@
 # Cycronet - 绕过 TLS/HTTP2 指纹检测的 Python HTTP 客户端
 
-[English](README_EN.md) | 简体中文
-
-## cycronet交流群
-- 加作者微信 Chankipen 说明来意
-
-
 ## 🎯 核心功能
 
-浏览器请求协议指纹检测的尽头，当前库已经没有任何检测点，支持高并发，项目语法类似requests使用方便，Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大的特点是能够产生真实的 Chrome 浏览器 TLS/HTTP2 指纹**，从而绕过各种反爬虫和指纹检测系统。
+Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大的特点是能够产生真实的 Chrome 浏览器 TLS/HTTP2 指纹**，从而绕过各种反爬虫和指纹检测系统。
 
 **✨ 新特性：**
 
@@ -17,6 +11,8 @@
 - 🔄 与 aiohttp/httpx 相同的使用体验
 - 🎯 真实的 Chrome TLS/HTTP2 指纹（同步和异步均支持）
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
+- 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
+- 📡 **流式响应（Streaming）支持（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -44,15 +40,6 @@
 **Cycronet 的解决方案：**
 
 Cycronet 直接使用 Chromium 的 Cronet 网络库，产生的所有网络特征与真实 Chrome 浏览器**完全一致**，无法被检测出是爬虫。
-
-## 项目使用
-```bash
-pip install cycronet
-```
-- 当前项目支持macos arm64, linux(glibc_2.18+), win64, win32
-- 代理支持http,https，socks5(无账号密码)
-- socks5带账号密码的使用pproxy转为http`pip install pproxy` `pproxy -l http://127.0.0.1:8118 -r socks5://user:pass@remote:1080`
-
 
 ## 🔐 TLS/HTTP2 指纹绕过
 
@@ -168,6 +155,7 @@ session = cycronet.CronetClient(
 **支持的 TLS 配置：**
 - `chrome_144`: Chrome 144 版本的 TLS 指纹（默认）
 
+#### 添加自定义 TLS 配置
 
 ##### 使用 set_tls_profiles() 函数
 ```python
@@ -187,9 +175,6 @@ session = cycronet.CronetClient(chrometls="chrome_test")
 ```
 
 ##### 你可以通过编辑 `tls_profiles.json` 文件来添加自定义的 TLS 指纹配置。
-
-
-你可以通过编辑 `tls_profiles.json` 文件来添加自定义的 TLS 指纹配置。
 
 **1. 找到配置文件位置**
 
@@ -480,7 +465,6 @@ session = cycronet.CronetClient(
     proxies={"https": "http://127.0.0.1:8080"}
 )
 
-
 # 带认证的代理
 session = cycronet.CronetClient(
     verify=False,
@@ -492,6 +476,58 @@ print(response.json())
 session.close()
 ```
 
+### SOCKS5 代理（支持账号密码认证）
+
+```python
+import cycronet
+
+# SOCKS5 代理（无认证）
+response = cycronet.get('https://httpbin.org/ip', proxies='socks5://127.0.0.1:1080', verify=False)
+
+# SOCKS5 代理（带账号密码）
+response = cycronet.get(
+    'https://httpbin.org/ip',
+    proxies='socks5://username:password@127.0.0.1:1080',
+    verify=False
+)
+
+# socks5h 模式 / 字典格式均支持
+proxies = {
+    'http': 'socks5://username:password@127.0.0.1:1080',
+    'https': 'socks5://username:password@127.0.0.1:1080'
+}
+response = cycronet.get('https://httpbin.org/ip', proxies=proxies, verify=False)
+```
+
+详细用法请参考 [README.md](../README.md)
+
+## 📡 流式响应（Streaming）
+
+```python
+import cycronet
+
+# 流式读取
+response = cycronet.get('https://httpbin.org/stream/5', stream=True, verify=False)
+for line in response.iter_lines():
+    print(line)
+response.close()
+
+# 按块下载
+response = cycronet.get('https://example.com/file.zip', stream=True, verify=False)
+with open('file.zip', 'wb') as f:
+    for chunk in response.iter_content(chunk_size=8192):
+        f.write(chunk)
+response.close()
+
+# 异步流式
+import asyncio
+async def stream():
+    r = await cycronet.async_get('https://httpbin.org/stream/5', stream=True, verify=False)
+    async for line in r.aiter_lines():
+        print(line)
+    r.close()
+asyncio.run(stream())
+```
 
 ## 🔧 高级配置
 
@@ -540,9 +576,9 @@ session = cycronet.CronetClient(
 )
 
 # 方法 1: 使用 set_cookie 设置 Cookie（推荐）
-session.cookies.update({'session_id': 'abc123'}, domain='www.baidu.com')
-session.cookies.update({'user_token': 'xyz789'}, domain='tsvmp.com')
-session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
+session.cookies.set_cookie('session_id', 'abc123', domain='example.com')
+session.cookies.set_cookie('user_token', 'xyz789', domain='example.com')
+session.cookies.set_cookie('preferences', 'dark_mode=1', domain='example.com')
 
 # 方法 2: 使用 update 批量设置（不指定域名）
 session.cookies.update({
@@ -565,10 +601,9 @@ import cycronet
 session = cycronet.CronetClient(verify=False)
 
 # 为不同域名设置不同的 Cookie
-session.cookies.update({'session_id': 'abc123'}, domain='www.baidu.com')
-session.cookies.update({'user_token': 'xyz789'}, domain='tsvmp.com')
-session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
-
+session.cookies.set_cookie('api_key', 'key123', domain='api.example.com')
+session.cookies.set_cookie('user_token', 'token456', domain='www.example.com')
+session.cookies.set_cookie('session', 'session789', domain='example.com', path='/admin')
 
 # 访问不同域名时会自动使用对应的 Cookie
 response1 = session.get('https://api.example.com/data')      # 携带 api_key
@@ -589,8 +624,7 @@ session = cycronet.CronetClient(verify=False)
 response = session.get('https://example.com/login')
 
 # 从响应中获取 Cookie 并更新
-session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
-
+session.cookies.set_cookie('auth_token', 'new_token_from_response', domain='example.com')
 
 # 后续请求会携带更新后的 Cookie
 response = session.get('https://example.com/dashboard')
@@ -606,8 +640,8 @@ import cycronet
 session = cycronet.CronetClient(verify=False)
 
 # 设置 Cookie
-session.cookies.update({'session_id': 'abc123'}, domain='example.com')
-session.cookies.update({'user_token': 'xyz789'}, domain='example.com')
+session.cookies.set_cookie('key1', 'value1', domain='example.com')
+session.cookies.set_cookie('key2', 'value2', domain='example.com')
 
 # 查看所有 Cookie
 print(session.cookies.get_dict())  # 获取所有 Cookie 的字典
@@ -663,7 +697,8 @@ import cycronet
 async def main():
     async with cycronet.AsyncCronetClient(verify=False) as session:
         # 初始化 Cookie
-        session.cookies.update({'session_id': 'abc123'}, domain=example.com')
+        session.cookies.set_cookie('session_id', 'async_session_123', domain='example.com')
+        session.cookies.set_cookie('user_token', 'token_xyz', domain='example.com')
 
         # 发送请求
         response = await session.get('https://example.com')
@@ -808,5 +843,3 @@ asyncio.run(main())
 - **Cloudflare 检测测试**：https://check.torproject.org/
 
 **Cycronet - 真实的 Chrome 指纹，绕过一切检测！** 🚀
-
-
