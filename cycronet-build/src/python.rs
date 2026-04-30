@@ -3,8 +3,9 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::cronet::{SessionConfig, SessionManager};
+use crate::cronet::{SessionConfig, SessionManager, StreamChunk, CronetRequest};
 use crate::cronet_pb::{Header, TargetRequest};
+use std::sync::Mutex as StdMutex;
 
 /// Python wrapper for SessionManager
 #[pyclass]
@@ -169,6 +170,97 @@ impl PyCronetClient {
         }
     }
 
+    /// Execute streaming request using a session (synchronous)
+    ///
+    /// Returns: PyStreamReader with status_code, headers, and next_chunk_sync() method
+    #[pyo3(signature = (session_id, url, method, headers=None, body=None, allow_redirects=true))]
+    fn request_stream_sync(
+        &self,
+        py: Python,
+        session_id: String,
+        url: String,
+        method: String,
+        headers: Option<Vec<(String, String)>>,
+        body: Option<Vec<u8>>,
+        allow_redirects: bool,
+    ) -> PyResult<PyObject> {
+        let headers_vec = headers.unwrap_or_default();
+        let body_vec = body.unwrap_or_default();
+
+        let target = TargetRequest {
+            url,
+            method,
+            headers: headers_vec
+                .into_iter()
+                .map(|(name, value)| Header { name, value })
+                .collect(),
+            body: body_vec,
+        };
+
+        let result = self.manager.send_request_stream(&session_id, &target, allow_redirects);
+
+        match result {
+            Some((request, mut rx, timeout_ms)) => {
+                let timeout_duration = Duration::from_millis(timeout_ms);
+
+                // Wait for headers (first chunk), release GIL
+                let first_chunk = py.allow_threads(|| {
+                    let (tx, timeout_rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let chunk = rx.blocking_recv();
+                        let _ = tx.send((chunk, rx));
+                    });
+                    timeout_rx.recv_timeout(timeout_duration)
+                });
+
+                match first_chunk {
+                    Ok((Some(StreamChunk::Headers { status_code, headers }), rx)) => {
+                        let reader = PyStreamReader {
+                            rx: StdMutex::new(Some(rx)),
+                            _request: StdMutex::new(Some(request)),
+                            status_code,
+                            headers_list: headers,
+                        };
+                        Ok(Py::new(py, reader)?.into_py(py))
+                    }
+                    Ok((Some(StreamChunk::Error(e)), _)) => {
+                        drop(request);
+                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                            format!("Request failed: {}", e)
+                        ))
+                    }
+                    Ok((Some(StreamChunk::Done), _)) => {
+                        drop(request);
+                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                            "Stream completed without headers"
+                        ))
+                    }
+                    Ok((Some(StreamChunk::Data(_)), _)) => {
+                        drop(request);
+                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                            "Unexpected data before headers"
+                        ))
+                    }
+                    Ok((None, _)) => {
+                        drop(request);
+                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                            "Stream closed unexpectedly"
+                        ))
+                    }
+                    Err(_) => {
+                        drop(request);
+                        Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
+                            format!("Request timeout after {}ms", timeout_ms)
+                        ))
+                    }
+                }
+            }
+            None => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Failed to send stream request (session not found or concurrent limit reached)"
+            )),
+        }
+    }
+
     /// Close a session
     fn close_session(&self, session_id: String) -> PyResult<bool> {
         Ok(self.manager.close_session(&session_id))
@@ -180,10 +272,79 @@ impl PyCronetClient {
     }
 }
 
+/// Python wrapper for streaming response reader
+#[pyclass]
+pub struct PyStreamReader {
+    rx: StdMutex<Option<tokio::sync::mpsc::UnboundedReceiver<StreamChunk>>>,
+    _request: StdMutex<Option<CronetRequest>>,
+    #[pyo3(get)]
+    status_code: i32,
+    headers_list: Vec<(String, String)>,
+}
+
+#[pymethods]
+impl PyStreamReader {
+    /// Get response headers as list of (name, value) tuples
+    #[getter]
+    fn headers(&self, py: Python) -> PyResult<PyObject> {
+        let list = PyList::empty_bound(py);
+        for (name, value) in &self.headers_list {
+            list.append((name.as_str(), value.as_str()))?;
+        }
+        Ok(list.into())
+    }
+
+    /// Read next chunk synchronously (releases GIL)
+    /// Returns bytes or None when stream is complete
+    fn next_chunk_sync(&self, py: Python) -> PyResult<Option<PyObject>> {
+        let rx_mutex = &self.rx;
+
+        let chunk = py.allow_threads(|| {
+            let mut guard = rx_mutex.lock().unwrap();
+            if let Some(ref mut recv) = *guard {
+                recv.blocking_recv()
+            } else {
+                None
+            }
+        });
+
+        match chunk {
+            Some(StreamChunk::Data(data)) => {
+                Ok(Some(PyBytes::new_bound(py, &data).into()))
+            }
+            Some(StreamChunk::Done) | None => {
+                Ok(None)
+            }
+            Some(StreamChunk::Error(e)) => {
+                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    format!("Stream error: {}", e)
+                ))
+            }
+            Some(StreamChunk::Headers { .. }) => {
+                // Unexpected headers in data stream, skip and try next
+                self.next_chunk_sync(py)
+            }
+        }
+    }
+
+    /// Close the stream reader and release resources
+    fn close(&self) -> PyResult<()> {
+        // Drop receiver
+        if let Ok(mut guard) = self.rx.lock() {
+            *guard = None;
+        }
+        // Drop request handle (triggers cancel if still active)
+        if let Ok(mut guard) = self._request.lock() {
+            *guard = None;
+        }
+        Ok(())
+    }
+}
+
 /// Python module
 #[pymodule]
 fn cronet_cloak(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCronetClient>()?;
+    m.add_class::<PyStreamReader>()?;
     Ok(())
 }
-

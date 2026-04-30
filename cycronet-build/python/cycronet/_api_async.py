@@ -5,55 +5,91 @@ Asynchronous module-level API functions for cycronet.
 from typing import Optional, Dict, Any
 
 from ._types import HeadersType, CookiesType, DataType
-from ._response import Response
+from ._response import Response, StreamResponse
 from ._client import AsyncCronetClient
 
 
-async def async_get(url: str, *, verify: bool = True, timeout: Optional[float] = None, **kwargs) -> Response:
+async def _async_send(session, method, url, stream=False, **kwargs):
+    """Helper to send async request, keeping session alive for streaming."""
+    response = await session.request(method, url, stream=stream, **kwargs)
+    if stream and isinstance(response, StreamResponse):
+        response._session = session
+    return response
+
+
+async def async_get(url: str, *, verify: bool = True, timeout: Optional[float] = None, stream: bool = False, **kwargs):
     """Async GET request"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = AsyncCronetClient(verify=verify, timeout_ms=timeout_ms)
+        await session.__aenter__()
+        return await _async_send(session, "GET", url, stream=True, **kwargs)
     async with AsyncCronetClient(verify=verify, timeout_ms=timeout_ms) as session:
         return await session.get(url, **kwargs)
 
 
-async def async_post(url: str, *, verify: bool = True, timeout: Optional[float] = None, **kwargs) -> Response:
+async def async_post(url: str, *, verify: bool = True, timeout: Optional[float] = None, stream: bool = False, **kwargs):
     """Async POST request"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = AsyncCronetClient(verify=verify, timeout_ms=timeout_ms)
+        await session.__aenter__()
+        return await _async_send(session, "POST", url, stream=True, **kwargs)
     async with AsyncCronetClient(verify=verify, timeout_ms=timeout_ms) as session:
         return await session.post(url, **kwargs)
 
 
-async def async_put(url: str, *, verify: bool = True, timeout: Optional[float] = None, **kwargs) -> Response:
+async def async_put(url: str, *, verify: bool = True, timeout: Optional[float] = None, stream: bool = False, **kwargs):
     """Async PUT request"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = AsyncCronetClient(verify=verify, timeout_ms=timeout_ms)
+        await session.__aenter__()
+        return await _async_send(session, "PUT", url, stream=True, **kwargs)
     async with AsyncCronetClient(verify=verify, timeout_ms=timeout_ms) as session:
         return await session.put(url, **kwargs)
 
 
-async def async_delete(url: str, *, verify: bool = True, timeout: Optional[float] = None, **kwargs) -> Response:
+async def async_delete(url: str, *, verify: bool = True, timeout: Optional[float] = None, stream: bool = False, **kwargs):
     """Async DELETE request"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = AsyncCronetClient(verify=verify, timeout_ms=timeout_ms)
+        await session.__aenter__()
+        return await _async_send(session, "DELETE", url, stream=True, **kwargs)
     async with AsyncCronetClient(verify=verify, timeout_ms=timeout_ms) as session:
         return await session.delete(url, **kwargs)
 
 
-async def async_patch(url: str, *, verify: bool = True, timeout: Optional[float] = None, **kwargs) -> Response:
+async def async_patch(url: str, *, verify: bool = True, timeout: Optional[float] = None, stream: bool = False, **kwargs):
     """Async PATCH request"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = AsyncCronetClient(verify=verify, timeout_ms=timeout_ms)
+        await session.__aenter__()
+        return await _async_send(session, "PATCH", url, stream=True, **kwargs)
     async with AsyncCronetClient(verify=verify, timeout_ms=timeout_ms) as session:
         return await session.patch(url, **kwargs)
 
 
-async def async_head(url: str, *, verify: bool = True, timeout: Optional[float] = None, **kwargs) -> Response:
+async def async_head(url: str, *, verify: bool = True, timeout: Optional[float] = None, stream: bool = False, **kwargs):
     """Async HEAD request"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = AsyncCronetClient(verify=verify, timeout_ms=timeout_ms)
+        await session.__aenter__()
+        return await _async_send(session, "HEAD", url, stream=True, **kwargs)
     async with AsyncCronetClient(verify=verify, timeout_ms=timeout_ms) as session:
         return await session.head(url, **kwargs)
 
 
-async def async_options(url: str, *, verify: bool = True, timeout: Optional[float] = None, **kwargs) -> Response:
+async def async_options(url: str, *, verify: bool = True, timeout: Optional[float] = None, stream: bool = False, **kwargs):
     """Async OPTIONS request"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = AsyncCronetClient(verify=verify, timeout_ms=timeout_ms)
+        await session.__aenter__()
+        return await _async_send(session, "OPTIONS", url, stream=True, **kwargs)
     async with AsyncCronetClient(verify=verify, timeout_ms=timeout_ms) as session:
         return await session.options(url, **kwargs)
 

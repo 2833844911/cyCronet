@@ -5,8 +5,16 @@ Synchronous module-level API functions for cycronet.
 from typing import Optional, Dict, Any, Union
 
 from ._types import HeadersType, CookiesType, DataType
-from ._response import Response
+from ._response import Response, StreamResponse
 from ._client import CronetClient
+
+
+def _send(session, method, url, stream=False, **kwargs):
+    """Helper to send request, keeping session alive for streaming."""
+    response = session.request(method, url, stream=stream, **kwargs)
+    if stream and isinstance(response, StreamResponse):
+        response._session = session  # Keep session alive until stream is closed
+    return response
 
 
 def get(
@@ -20,10 +28,16 @@ def get(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     chrometls: Optional[str] = "chrome_144",
+    stream: bool = False,
     **kwargs
-) -> Response:
+):
     """Send GET request - similar to requests.get()"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls)
+        return _send(session, "GET", url, stream=True,
+                     params=params, headers=headers, cookies=cookies,
+                     verify=verify, allow_redirects=allow_redirects, **kwargs)
     with CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls) as session:
         return session.get(
             url,
@@ -49,10 +63,17 @@ def post(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     chrometls: Optional[str] = "chrome_144",
+    stream: bool = False,
     **kwargs
-) -> Response:
+):
     """Send POST request - similar to requests.post()"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls)
+        return _send(session, "POST", url, stream=True,
+                     params=params, headers=headers, cookies=cookies,
+                     data=data, json=json, verify=verify,
+                     allow_redirects=allow_redirects, **kwargs)
     with CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls) as session:
         return session.post(
             url,
@@ -80,10 +101,17 @@ def put(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     chrometls: Optional[str] = "chrome_144",
+    stream: bool = False,
     **kwargs
-) -> Response:
+):
     """Send PUT request - similar to requests.put()"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls)
+        return _send(session, "PUT", url, stream=True,
+                     params=params, headers=headers, cookies=cookies,
+                     data=data, json=json, verify=verify,
+                     allow_redirects=allow_redirects, **kwargs)
     with CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls) as session:
         return session.put(
             url,
@@ -109,10 +137,16 @@ def delete(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     chrometls: Optional[str] = "chrome_144",
+    stream: bool = False,
     **kwargs
-) -> Response:
+):
     """Send DELETE request - similar to requests.delete()"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls)
+        return _send(session, "DELETE", url, stream=True,
+                     params=params, headers=headers, cookies=cookies,
+                     verify=verify, allow_redirects=allow_redirects, **kwargs)
     with CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls) as session:
         return session.delete(
             url,
@@ -138,10 +172,17 @@ def patch(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     chrometls: Optional[str] = "chrome_144",
+    stream: bool = False,
     **kwargs
-) -> Response:
+):
     """Send PATCH request - similar to requests.patch()"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls)
+        return _send(session, "PATCH", url, stream=True,
+                     params=params, headers=headers, cookies=cookies,
+                     data=data, json=json, verify=verify,
+                     allow_redirects=allow_redirects, **kwargs)
     with CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls) as session:
         return session.patch(
             url,
@@ -167,10 +208,16 @@ def head(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     chrometls: Optional[str] = "chrome_144",
+    stream: bool = False,
     **kwargs
-) -> Response:
+):
     """Send HEAD request - similar to requests.head()"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls)
+        return _send(session, "HEAD", url, stream=True,
+                     params=params, headers=headers, cookies=cookies,
+                     verify=verify, allow_redirects=allow_redirects, **kwargs)
     with CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls) as session:
         return session.head(
             url,
@@ -194,10 +241,16 @@ def options(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     chrometls: Optional[str] = "chrome_144",
+    stream: bool = False,
     **kwargs
-) -> Response:
+):
     """Send OPTIONS request - similar to requests.options()"""
     timeout_ms = int(timeout * 1000) if timeout else 30000
+    if stream:
+        session = CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls)
+        return _send(session, "OPTIONS", url, stream=True,
+                     params=params, headers=headers, cookies=cookies,
+                     verify=verify, allow_redirects=allow_redirects, **kwargs)
     with CronetClient(verify=verify, timeout_ms=timeout_ms, proxies=proxies, chrometls=chrometls) as session:
         return session.options(
             url,

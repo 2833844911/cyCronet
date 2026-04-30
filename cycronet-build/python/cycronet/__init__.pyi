@@ -2,7 +2,7 @@
 Type stubs for cycronet package
 """
 
-from typing import Dict, List, Tuple, Optional, Union, Any, Iterator
+from typing import Dict, List, Tuple, Optional, Union, Any, Iterator, Generator
 from dataclasses import dataclass
 
 HeadersType = Union[Dict[str, str], List[Tuple[str, str]]]
@@ -68,6 +68,34 @@ class RequestError(Exception):
     """请求错误"""
     pass
 
+class StreamResponse:
+    """流式 HTTP 响应对象"""
+    status_code: int
+    url: str
+    _closed: bool
+    _session: Optional[Any]
+
+    def __init__(self, stream_reader: Any, headers: Dict[str, List[str]],
+                 url: str = "", cookies: Optional[CookieJar] = None) -> None: ...
+    @property
+    def content(self) -> bytes: ...
+    @property
+    def text(self) -> str: ...
+    def json(self) -> Any: ...
+    @property
+    def headers(self) -> Dict[str, str]: ...
+    @property
+    def cookies(self) -> CookieJar: ...
+    @property
+    def ok(self) -> bool: ...
+    def raise_for_status(self) -> None: ...
+    def iter_content(self, chunk_size: Optional[int] = None) -> Generator[bytes, None, None]: ...
+    def iter_lines(self, chunk_size: int = 512, decode_unicode: bool = False,
+                   delimiter: Optional[str] = None) -> Generator[Union[bytes, str], None, None]: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> 'StreamResponse': ...
+    def __exit__(self, *args: Any) -> None: ...
+
 class Session:
     """Session 对象 - 兼容 requests.Session"""
 
@@ -88,8 +116,9 @@ class Session:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     def get(
         self,
@@ -100,8 +129,9 @@ class Session:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     def post(
         self,
@@ -114,8 +144,9 @@ class Session:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     def put(
         self,
@@ -128,8 +159,9 @@ class Session:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     def delete(
         self,
@@ -140,8 +172,9 @@ class Session:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     def patch(
         self,
@@ -154,8 +187,9 @@ class Session:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     def head(
         self,
@@ -166,8 +200,9 @@ class Session:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     def options(
         self,
@@ -178,8 +213,9 @@ class Session:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     def upload_file(
         self,
@@ -231,8 +267,9 @@ class AsyncSession:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     async def get(
         self,
@@ -243,8 +280,9 @@ class AsyncSession:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     async def post(
         self,
@@ -257,8 +295,9 @@ class AsyncSession:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     async def put(
         self,
@@ -271,8 +310,9 @@ class AsyncSession:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     async def delete(
         self,
@@ -283,8 +323,9 @@ class AsyncSession:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     async def patch(
         self,
@@ -297,8 +338,9 @@ class AsyncSession:
         json: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     async def head(
         self,
@@ -309,8 +351,9 @@ class AsyncSession:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     async def options(
         self,
@@ -321,8 +364,9 @@ class AsyncSession:
         cookies: Optional[CookiesType] = None,
         timeout: Optional[float] = None,
         verify: Optional[bool] = None,
-        allow_redirects: bool = True
-    ) -> Response: ...
+        allow_redirects: bool = True,
+        stream: bool = False
+    ) -> Union[Response, StreamResponse]: ...
 
     async def upload_file(
         self,
@@ -409,8 +453,9 @@ def get(
     verify: bool = True,
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None
-) -> Response: ...
+    chrometls: Optional[str] = None,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 def post(
     url: str,
@@ -424,8 +469,9 @@ def post(
     verify: bool = True,
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None
-) -> Response: ...
+    chrometls: Optional[str] = None,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 def put(
     url: str,
@@ -439,8 +485,9 @@ def put(
     verify: bool = True,
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None
-) -> Response: ...
+    chrometls: Optional[str] = None,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 def delete(
     url: str,
@@ -452,8 +499,9 @@ def delete(
     verify: bool = True,
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None
-) -> Response: ...
+    chrometls: Optional[str] = None,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 def patch(
     url: str,
@@ -467,8 +515,9 @@ def patch(
     verify: bool = True,
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None
-) -> Response: ...
+    chrometls: Optional[str] = None,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 def head(
     url: str,
@@ -480,8 +529,9 @@ def head(
     verify: bool = True,
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None
-) -> Response: ...
+    chrometls: Optional[str] = None,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 def options(
     url: str,
@@ -493,8 +543,9 @@ def options(
     verify: bool = True,
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None
-) -> Response: ...
+    chrometls: Optional[str] = None,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 def upload_file(
     url: str,
@@ -529,8 +580,9 @@ async def async_get(
     cookies: Optional[CookiesType] = None,
     timeout: Optional[float] = None,
     verify: bool = True,
-    allow_redirects: bool = True
-) -> Response: ...
+    allow_redirects: bool = True,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 async def async_post(
     url: str,
@@ -542,8 +594,9 @@ async def async_post(
     json: Optional[Dict[str, Any]] = None,
     timeout: Optional[float] = None,
     verify: bool = True,
-    allow_redirects: bool = True
-) -> Response: ...
+    allow_redirects: bool = True,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 async def async_put(
     url: str,
@@ -555,8 +608,9 @@ async def async_put(
     json: Optional[Dict[str, Any]] = None,
     timeout: Optional[float] = None,
     verify: bool = True,
-    allow_redirects: bool = True
-) -> Response: ...
+    allow_redirects: bool = True,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 async def async_delete(
     url: str,
@@ -566,8 +620,9 @@ async def async_delete(
     cookies: Optional[CookiesType] = None,
     timeout: Optional[float] = None,
     verify: bool = True,
-    allow_redirects: bool = True
-) -> Response: ...
+    allow_redirects: bool = True,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 async def async_patch(
     url: str,
@@ -579,8 +634,9 @@ async def async_patch(
     json: Optional[Dict[str, Any]] = None,
     timeout: Optional[float] = None,
     verify: bool = True,
-    allow_redirects: bool = True
-) -> Response: ...
+    allow_redirects: bool = True,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 async def async_head(
     url: str,
@@ -590,8 +646,9 @@ async def async_head(
     cookies: Optional[CookiesType] = None,
     timeout: Optional[float] = None,
     verify: bool = True,
-    allow_redirects: bool = True
-) -> Response: ...
+    allow_redirects: bool = True,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 async def async_options(
     url: str,
@@ -601,8 +658,9 @@ async def async_options(
     cookies: Optional[CookiesType] = None,
     timeout: Optional[float] = None,
     verify: bool = True,
-    allow_redirects: bool = True
-) -> Response: ...
+    allow_redirects: bool = True,
+    stream: bool = False
+) -> Union[Response, StreamResponse]: ...
 
 async def async_upload_file(
     url: str,
