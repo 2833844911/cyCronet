@@ -11,6 +11,8 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🔄 与 aiohttp/httpx 相同的使用体验
 - 🎯 真实的 Chrome TLS/HTTP2 指纹（同步和异步均支持）
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
+- 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
+- 📡 **流式响应（Streaming）支持（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -463,7 +465,6 @@ session = cycronet.CronetClient(
     proxies={"https": "http://127.0.0.1:8080"}
 )
 
-
 # 带认证的代理
 session = cycronet.CronetClient(
     verify=False,
@@ -475,6 +476,183 @@ print(response.json())
 session.close()
 ```
 
+### SOCKS5 代理（支持账号密码认证）
+
+Cycronet 原生支持 SOCKS5 代理，包括带用户名/密码认证的 SOCKS5 代理，无需额外依赖。
+
+```python
+import cycronet
+
+# SOCKS5 代理（无认证）
+response = cycronet.get(
+    'https://httpbin.org/ip',
+    proxies='socks5://127.0.0.1:1080',
+    verify=False
+)
+
+# SOCKS5 代理（带账号密码）
+response = cycronet.get(
+    'https://httpbin.org/ip',
+    proxies='socks5://username:password@127.0.0.1:1080',
+    verify=False
+)
+print(response.json())  # {"origin": "代理IP"}
+
+# socks5h 模式（DNS 由代理端解析，等同于 socks5）
+response = cycronet.get(
+    'https://httpbin.org/ip',
+    proxies='socks5h://username:password@127.0.0.1:1080',
+    verify=False
+)
+
+# 字典格式
+proxies = {
+    'http': 'socks5://username:password@127.0.0.1:1080',
+    'https': 'socks5://username:password@127.0.0.1:1080'
+}
+response = cycronet.get('https://httpbin.org/ip', proxies=proxies, verify=False)
+```
+
+**Session 中使用 SOCKS5 代理：**
+
+```python
+import cycronet
+
+# 同步 Session
+with cycronet.CronetClient(
+    verify=False,
+    proxies='socks5://username:password@127.0.0.1:1080'
+) as session:
+    r1 = session.get('https://httpbin.org/ip')
+    r2 = session.get('https://httpbin.org/get')  # 复用连接，H2 多路复用
+    print(r1.json(), r2.json())
+
+# 异步 Session
+import asyncio
+
+async def main():
+    async with cycronet.AsyncCronetClient(
+        verify=False,
+        proxies='socks5://username:password@127.0.0.1:1080'
+    ) as session:
+        response = await session.get('https://httpbin.org/ip')
+        print(response.json())
+
+asyncio.run(main())
+```
+
+**支持的代理协议：**
+
+| 协议 | 格式 | 认证 |
+|------|------|------|
+| HTTP | `http://host:port` | ✅ 支持 |
+| HTTPS | `https://host:port` | ✅ 支持 |
+| SOCKS5 | `socks5://host:port` | ✅ 支持 |
+| SOCKS5h | `socks5h://host:port` | ✅ 支持 |
+
+> **注意**：Cronet 的 SOCKS5 实现默认使用远程 DNS 解析（等同于 `socks5h`），因此 `socks5://` 和 `socks5h://` 行为一致。
+
+## 📡 流式响应（Streaming）
+
+Cycronet 支持流式读取响应数据，适用于大文件下载、SSE（Server-Sent Events）、分块数据处理等场景。
+
+### 基本流式读取
+
+```python
+import cycronet
+
+# 使用 stream=True 开启流式模式
+response = cycronet.get('https://httpbin.org/stream/5', stream=True, verify=False)
+print(f"状态码: {response.status_code}")
+
+# 按行迭代
+for line in response.iter_lines():
+    print(line)
+
+# 使用完毕后关闭
+response.close()
+```
+
+### 按块读取（下载大文件）
+
+```python
+import cycronet
+
+response = cycronet.get('https://example.com/large-file.zip', stream=True, verify=False)
+
+with open('output.zip', 'wb') as f:
+    for chunk in response.iter_content(chunk_size=8192):
+        f.write(chunk)
+
+response.close()
+```
+
+### 使用 with 语句（自动关闭）
+
+```python
+import cycronet
+
+with cycronet.CronetClient(verify=False) as session:
+    response = session.get('https://httpbin.org/stream/3', stream=True)
+
+    with response:
+        for line in response.iter_lines():
+            print(line)
+```
+
+### StreamResponse 便捷属性
+
+StreamResponse 也支持直接访问完整响应内容（会自动消费整个流）：
+
+```python
+import cycronet
+
+response = cycronet.get('https://httpbin.org/get', stream=True, verify=False)
+
+# 直接获取完整内容
+print(response.text)       # 文本内容
+print(response.content)    # 原始字节
+print(response.json())     # JSON 解析
+```
+
+### 异步流式读取
+
+```python
+import asyncio
+import cycronet
+
+async def stream_data():
+    response = await cycronet.async_get(
+        'https://httpbin.org/stream/5',
+        stream=True, verify=False
+    )
+
+    # 异步按行迭代
+    async for line in response.aiter_lines():
+        print(line)
+
+    response.close()
+
+asyncio.run(stream_data())
+```
+
+### 流式 + SOCKS5 代理
+
+```python
+import cycronet
+
+response = cycronet.get(
+    'https://httpbin.org/stream/3',
+    proxies='socks5://username:password@127.0.0.1:1080',
+    stream=True,
+    verify=False
+)
+
+for line in response.iter_lines():
+    print(line)
+
+response.close()
+```
 
 ## 🔧 高级配置
 

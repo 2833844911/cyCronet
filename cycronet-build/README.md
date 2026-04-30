@@ -9,8 +9,10 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🚀 同时支持同步和异步 API
 - ⚡ 异步并发请求，性能提升 5-10 倍
 - 🔄 与 aiohttp/httpx 相同的使用体验
-[README.md](../README.md)- 🎯 真实的 Chrome TLS/HTTP2 指纹（同步和异步均支持）
+- 🎯 真实的 Chrome TLS/HTTP2 指纹（同步和异步均支持）
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
+- 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
+- 📡 **流式响应（Streaming）支持（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -463,7 +465,6 @@ session = cycronet.CronetClient(
     proxies={"https": "http://127.0.0.1:8080"}
 )
 
-
 # 带认证的代理
 session = cycronet.CronetClient(
     verify=False,
@@ -475,6 +476,58 @@ print(response.json())
 session.close()
 ```
 
+### SOCKS5 代理（支持账号密码认证）
+
+```python
+import cycronet
+
+# SOCKS5 代理（无认证）
+response = cycronet.get('https://httpbin.org/ip', proxies='socks5://127.0.0.1:1080', verify=False)
+
+# SOCKS5 代理（带账号密码）
+response = cycronet.get(
+    'https://httpbin.org/ip',
+    proxies='socks5://username:password@127.0.0.1:1080',
+    verify=False
+)
+
+# socks5h 模式 / 字典格式均支持
+proxies = {
+    'http': 'socks5://username:password@127.0.0.1:1080',
+    'https': 'socks5://username:password@127.0.0.1:1080'
+}
+response = cycronet.get('https://httpbin.org/ip', proxies=proxies, verify=False)
+```
+
+详细用法请参考 [README.md](../README.md)
+
+## 📡 流式响应（Streaming）
+
+```python
+import cycronet
+
+# 流式读取
+response = cycronet.get('https://httpbin.org/stream/5', stream=True, verify=False)
+for line in response.iter_lines():
+    print(line)
+response.close()
+
+# 按块下载
+response = cycronet.get('https://example.com/file.zip', stream=True, verify=False)
+with open('file.zip', 'wb') as f:
+    for chunk in response.iter_content(chunk_size=8192):
+        f.write(chunk)
+response.close()
+
+# 异步流式
+import asyncio
+async def stream():
+    r = await cycronet.async_get('https://httpbin.org/stream/5', stream=True, verify=False)
+    async for line in r.aiter_lines():
+        print(line)
+    r.close()
+asyncio.run(stream())
+```
 
 ## 🔧 高级配置
 
