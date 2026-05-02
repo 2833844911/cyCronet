@@ -1,2 +1,0 @@
-cargo:rerun-if-env-changed=PYO3_CONFIG_FILE
-cargo:rerun-if-changed=E:\myxm\cyCronet\cycronet-build\target\maturin\pyo3-config-aarch64-apple-darwin-3.11.txt
