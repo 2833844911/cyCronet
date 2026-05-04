@@ -41,6 +41,9 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 
 Cycronet 直接使用 Chromium 的 Cronet 网络库，产生的所有网络特征与真实 Chrome 浏览器**完全一致**，无法被检测出是爬虫。
 
+## 安装
+```pip install cycronet```
+
 ## 🔐 TLS/HTTP2 指纹绕过
 
 ### 真实的 Chrome 指纹
