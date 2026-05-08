@@ -754,6 +754,28 @@ class Session:
             'headers': response.headers
         }
 
+    def websocket(self, url, *, on_open=None, on_message=None, on_close=None, on_error=None):
+        """Create a callback-based WebSocket connection.
+
+        Args:
+            url: WebSocket URL (ws:// or wss://)
+            on_open: callback(ws) - called when connected
+            on_message: callback(ws, message, is_text) - called on message
+            on_close: callback(ws, code, reason, was_clean) - called on close
+            on_error: callback(ws, error, net_error) - called on error
+
+        Returns:
+            WebSocketApp instance. Call .run_forever() or .run_in_background() to start.
+        """
+        from ._websocket import WebSocketApp
+        return WebSocketApp(
+            self, url,
+            on_open=on_open,
+            on_message=on_message,
+            on_close=on_close,
+            on_error=on_error,
+        )
+
     def close(self):
         """Close session"""
         if not self._closed:
