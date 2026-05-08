@@ -13,6 +13,7 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
 - 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
 - 📡 **流式响应（Streaming）支持（NEW！）**
+- 🔌 **WebSocket / WSS 支持，TLS 指纹与浏览器一致（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -501,7 +502,145 @@ response = cycronet.get('https://httpbin.org/ip', proxies=proxies, verify=False)
 
 详细用法请参考 [README.md](../README.md)
 
-## 📡 流式响应（Streaming）
+## � WebSocket 支持
+
+Cycronet 支持 WebSocket (`ws://`) 和安全 WebSocket (`wss://`) 连接，使用 Chromium 原生 WebSocket 实现，**TLS 指纹与 Chrome 浏览器完全一致**。
+
+### 基本用法
+
+```python
+import cycronet
+import time
+
+client = cycronet.PyCronetClient()
+session_id = client.create_session(skip_cert_verify=True)
+
+# 连接 WebSocket 服务器
+ws = client.websocket_connect(session_id, "wss://ws.postman-echo.com/raw")
+
+# 等待连接打开
+evt = ws.recv_timeout(10000)  # 超时 10 秒，单位毫秒
+if evt and evt["type"] == "open":
+    print(f"已连接! 协议: {evt.get('protocol', '')}")
+
+# 发送文本消息
+ws.send("Hello WebSocket!")
+
+# 接收消息
+evt = ws.recv_timeout(5000)
+if evt and evt["type"] == "message":
+    print(f"收到: {evt['data']}")       # 消息内容
+    print(f"文本: {evt['is_text']}")     # True=文本, False=二进制
+
+# 发送二进制消息
+ws.send_bytes(b"\x00\x01\x02\x03")
+
+# 优雅关闭
+ws.close(1000, "bye")
+evt = ws.recv_timeout(5000)
+if evt and evt["type"] == "close":
+    print(f"关闭: code={evt['code']}, clean={evt['was_clean']}")
+
+# 清理：先销毁 ws，再关闭 session
+del ws
+time.sleep(0.5)
+client.close_session(session_id)
+```
+
+### 事件类型
+
+`recv()` 和 `recv_timeout()` 返回一个字典，`type` 字段标识事件类型：
+
+| type | 字段 | 说明 |
+|------|------|------|
+| `open` | `protocol` | 连接成功，返回协商的子协议 |
+| `message` | `data`, `is_text` | 收到消息；`is_text=True` 时 `data` 为字符串，否则为 `bytes` |
+| `close` | `was_clean`, `code`, `reason` | 连接关闭 |
+| `error` | `net_error`, `message` | 连接错误 |
+
+### API 参考
+
+| 方法 | 说明 |
+|------|------|
+| `client.websocket_connect(session_id, url)` | 创建 WebSocket 连接，返回 `PyCronetWebSocket` |
+| `ws.send(text)` | 发送文本消息 |
+| `ws.send_bytes(data)` | 发送二进制消息 |
+| `ws.recv()` | 阻塞接收下一个事件（释放 GIL） |
+| `ws.recv_timeout(ms)` | 带超时接收，超时返回 `None` |
+| `ws.close(code, reason)` | 发起关闭握手 |
+
+### 快速收发多条消息
+
+```python
+# 批量发送
+for i in range(10):
+    ws.send(f"message-{i}")
+
+# 按序接收
+for i in range(10):
+    evt = ws.recv_timeout(5000)
+    assert evt["data"] == f"message-{i}"
+```
+
+### 回调模式（推荐）
+
+类似 `websocket-client` 的 `WebSocketApp`，注册回调函数，自动在后台接收并分发事件：
+
+```python
+import cycronet
+
+def on_open(ws):
+    print("已连接!")
+    ws.send("Hello!")
+
+def on_message(ws, message, is_text):
+    print(f"收到: {message}")
+    ws.close(1000, "done")
+
+def on_close(ws, code, reason, was_clean):
+    print(f"已关闭: code={code}")
+
+def on_error(ws, error, net_error):
+    print(f"错误: {error}")
+
+session = cycronet.CronetClient(verify=False)
+ws = session.websocket(
+    "wss://ws.postman-echo.com/raw",
+    on_open=on_open,
+    on_message=on_message,
+    on_close=on_close,
+    on_error=on_error,
+)
+
+# 方式 1：阻塞当前线程
+ws.run_forever()
+
+# 方式 2：在后台线程运行
+ws.run_in_background()
+# ... 做其他事情 ...
+ws.wait()  # 等待结束
+session.close()
+```
+
+**回调函数签名：**
+
+| 回调 | 签名 | 说明 |
+|------|------|------|
+| `on_open` | `(ws)` | 连接建立 |
+| `on_message` | `(ws, message, is_text)` | 收到消息，`is_text=True` 时 message 为 str |
+| `on_close` | `(ws, code, reason, was_clean)` | 连接关闭 |
+| `on_error` | `(ws, error, net_error)` | 发生错误 |
+
+在回调中可直接调用 `ws.send()` / `ws.send_bytes()` / `ws.close()` 发送消息或关闭连接。
+
+### 注意事项
+
+- **TLS 指纹**：`wss://` 连接使用 Chromium 原生 BoringSSL，指纹与 Chrome 浏览器完全一致
+- **线程安全**：`recv()` / `recv_timeout()` 会释放 Python GIL，不会阻塞其他线程
+- **回调模式清理**：`session.close()` 前需确保 ws 已关闭（`ws.wait()` 等待完成）
+- **轮询模式清理**：必须先 `del ws`，等待片刻后再 `session.close()`
+
+## �� 流式响应（Streaming）
 
 ```python
 import cycronet
@@ -778,6 +917,8 @@ response = cycronet.get('https://example.com', headers=headers, verify=False)
 - ✅ **高并发爬虫（使用异步 API）**
 - ✅ **大规模数据采集（异步并发）**
 - ✅ **实时监控系统（异步轮询）**
+- ✅ **WebSocket 实时通信（聊天、推送、行情）**
+- ✅ **WSS 连接绕过 WebSocket 指纹检测**
 
 ## 📦 安装
 

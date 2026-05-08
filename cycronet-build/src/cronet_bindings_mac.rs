@@ -1830,3 +1830,83 @@ extern "C" {
         self_: Cronet_RequestFinishedInfoPtr,
     ) -> Cronet_RequestFinishedInfo_FINISHED_REASON;
 }
+
+// --- WebSocket C API bindings ---
+
+pub type Cronet_WebSocketPtr = *mut ::std::os::raw::c_void;
+
+pub const Cronet_WebSocket_MESSAGE_TEXT: u32 = 1;
+pub const Cronet_WebSocket_MESSAGE_BINARY: u32 = 2;
+pub type Cronet_WebSocket_MessageType = u32;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Cronet_WebSocket_Callbacks {
+    pub on_open: ::std::option::Option<
+        unsafe extern "C" fn(
+            ws: Cronet_WebSocketPtr,
+            user_data: *mut ::std::os::raw::c_void,
+            protocol: *const ::std::os::raw::c_char,
+        ),
+    >,
+    pub on_message: ::std::option::Option<
+        unsafe extern "C" fn(
+            ws: Cronet_WebSocketPtr,
+            user_data: *mut ::std::os::raw::c_void,
+            msg_type: Cronet_WebSocket_MessageType,
+            data: *const ::std::os::raw::c_void,
+            len: u64,
+        ),
+    >,
+    pub on_close: ::std::option::Option<
+        unsafe extern "C" fn(
+            ws: Cronet_WebSocketPtr,
+            user_data: *mut ::std::os::raw::c_void,
+            was_clean: ::std::os::raw::c_int,
+            code: u16,
+            reason: *const ::std::os::raw::c_char,
+        ),
+    >,
+    pub on_error: ::std::option::Option<
+        unsafe extern "C" fn(
+            ws: Cronet_WebSocketPtr,
+            user_data: *mut ::std::os::raw::c_void,
+            net_error: ::std::os::raw::c_int,
+            message: *const ::std::os::raw::c_char,
+        ),
+    >,
+}
+
+extern "C" {
+    pub fn Cronet_WebSocket_Create(
+        engine: Cronet_EnginePtr,
+        callbacks: *const Cronet_WebSocket_Callbacks,
+        user_data: *mut ::std::os::raw::c_void,
+    ) -> Cronet_WebSocketPtr;
+}
+extern "C" {
+    pub fn Cronet_WebSocket_Connect(
+        ws: Cronet_WebSocketPtr,
+        url: *const ::std::os::raw::c_char,
+        sub_protocols: *const ::std::os::raw::c_char,
+        origin: *const ::std::os::raw::c_char,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn Cronet_WebSocket_Send(
+        ws: Cronet_WebSocketPtr,
+        msg_type: Cronet_WebSocket_MessageType,
+        data: *const ::std::os::raw::c_void,
+        len: u64,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn Cronet_WebSocket_Close(
+        ws: Cronet_WebSocketPtr,
+        code: u16,
+        reason: *const ::std::os::raw::c_char,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn Cronet_WebSocket_Destroy(ws: Cronet_WebSocketPtr);
+}

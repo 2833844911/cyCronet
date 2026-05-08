@@ -776,6 +776,44 @@ class Session:
             'headers': response.headers
         }
 
+    def websocket(
+        self,
+        url: str,
+        *,
+        on_open=None,
+        on_message=None,
+        on_close=None,
+        on_error=None,
+    ):
+        """Create a callback-based WebSocket connection.
+
+        Args:
+            url: WebSocket URL (ws:// or wss://)
+            on_open: Callback(ws) when connection is established
+            on_message: Callback(ws, message, is_text) when message received
+            on_close: Callback(ws, code, reason, was_clean) when closed
+            on_error: Callback(ws, error, net_error) on error
+
+        Returns:
+            WebSocketApp object. Call ws.run_forever() or ws.run_in_background().
+
+        Example:
+            session = cycronet.CronetClient(verify=False)
+            ws = session.websocket("wss://example.com/ws",
+                on_open=lambda ws: ws.send("hi"),
+                on_message=lambda ws, msg, is_text: print(msg),
+            )
+            ws.run_forever()
+        """
+        from ._websocket import WebSocketApp
+        return WebSocketApp(
+            self, url,
+            on_open=on_open,
+            on_message=on_message,
+            on_close=on_close,
+            on_error=on_error,
+        )
+
     def close(self):
         """Close session"""
         if not self._closed:

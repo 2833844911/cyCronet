@@ -428,14 +428,22 @@ impl Drop for CronetRequest {
                 let start = std::time::Instant::now();
                 while !self.completed.load(Ordering::Acquire) {
                     if start.elapsed() > std::time::Duration::from_secs(5) {
-                        eprintln!("[WARN] CronetRequest::drop - Timeout waiting for cancel callback");
-                        break;
+                        eprintln!("[WARN] CronetRequest::drop - Timeout waiting for cancel callback, leaking request to avoid use-after-free");
+                        // 网络线程仍持有引用，不能销毁任何指针，否则会 DCHECK crash。
+                        // 泄漏内存，但避免崩溃。
+                        self.ptr = std::ptr::null_mut();
+                        self.callback_ptr = std::ptr::null_mut();
+                        self.executor_ptr = std::ptr::null_mut();
+                        self.executor_context_ptr = std::ptr::null_mut();
+                        self.upload_data_provider_ptr = None;
+                        self.owned_engine_ptr = None;
+                        return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             }
 
-            // 现在可以安全销毁了（同步执行模式下不需要等待 executor）
+            // completed == true，可以安全销毁
             if !self.ptr.is_null() {
                 Cronet_UrlRequest_Destroy(self.ptr);
             }
@@ -1377,5 +1385,204 @@ impl SessionManager {
     /// 检查会话是否存在
     pub fn session_exists(&self, session_id: &str) -> bool {
         self.sessions.read().unwrap().contains_key(session_id)
+    }
+
+    /// 获取 session 的 engine_ptr（供 WebSocket 使用）
+    pub fn get_engine_ptr(&self, session_id: &str) -> Option<Cronet_EnginePtr> {
+        self.sessions.read().ok()?.get(session_id).map(|s| s.engine_ptr)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// WebSocket Support
+// -----------------------------------------------------------------------------
+
+/// WebSocket 事件
+#[derive(Debug, Clone)]
+pub enum WebSocketEvent {
+    Open { protocol: String },
+    Message { is_text: bool, data: Vec<u8> },
+    Close { was_clean: bool, code: u16, reason: String },
+    Error { net_error: i32, message: String },
+}
+
+/// 内部状态，通过 user_data 指针传递给 C 回调
+struct WebSocketState {
+    tx: std::sync::mpsc::Sender<WebSocketEvent>,
+}
+
+unsafe extern "C" fn ws_on_open(
+    _ws: Cronet_WebSocketPtr,
+    user_data: *mut c_void,
+    protocol: *const std::os::raw::c_char,
+) {
+    let state = &*(user_data as *const WebSocketState);
+    let proto = if protocol.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(protocol).to_string_lossy().into_owned()
+    };
+    let _ = state.tx.send(WebSocketEvent::Open { protocol: proto });
+}
+
+unsafe extern "C" fn ws_on_message(
+    _ws: Cronet_WebSocketPtr,
+    user_data: *mut c_void,
+    msg_type: Cronet_WebSocket_MessageType,
+    data: *const c_void,
+    len: u64,
+) {
+    let state = &*(user_data as *const WebSocketState);
+    let slice = std::slice::from_raw_parts(data as *const u8, len as usize);
+    let _ = state.tx.send(WebSocketEvent::Message {
+        is_text: msg_type == Cronet_WebSocket_MESSAGE_TEXT,
+        data: slice.to_vec(),
+    });
+}
+
+unsafe extern "C" fn ws_on_close(
+    _ws: Cronet_WebSocketPtr,
+    user_data: *mut c_void,
+    was_clean: std::os::raw::c_int,
+    code: u16,
+    reason: *const std::os::raw::c_char,
+) {
+    let state = &*(user_data as *const WebSocketState);
+    let reason_str = if reason.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(reason).to_string_lossy().into_owned()
+    };
+    let _ = state.tx.send(WebSocketEvent::Close {
+        was_clean: was_clean != 0,
+        code,
+        reason: reason_str,
+    });
+}
+
+unsafe extern "C" fn ws_on_error(
+    _ws: Cronet_WebSocketPtr,
+    user_data: *mut c_void,
+    net_error: std::os::raw::c_int,
+    message: *const std::os::raw::c_char,
+) {
+    let state = &*(user_data as *const WebSocketState);
+    let msg = if message.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(message).to_string_lossy().into_owned()
+    };
+    let _ = state.tx.send(WebSocketEvent::Error {
+        net_error,
+        message: msg,
+    });
+}
+
+/// Rust-safe WebSocket handle
+pub struct CronetWebSocket {
+    ws_ptr: Cronet_WebSocketPtr,
+    // Box 保持 state 存活，C 回调通过 user_data 指针访问
+    _state: Box<WebSocketState>,
+    pub rx: std::sync::mpsc::Receiver<WebSocketEvent>,
+}
+
+unsafe impl Send for CronetWebSocket {}
+
+impl CronetWebSocket {
+    /// 用已有 engine 创建 WebSocket
+    pub fn new(engine_ptr: Cronet_EnginePtr) -> Result<Self, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let state = Box::new(WebSocketState { tx });
+        let state_ptr = &*state as *const WebSocketState as *mut c_void;
+
+        let callbacks = Cronet_WebSocket_Callbacks {
+            on_open: Some(ws_on_open),
+            on_message: Some(ws_on_message),
+            on_close: Some(ws_on_close),
+            on_error: Some(ws_on_error),
+        };
+
+        let ws_ptr = unsafe {
+            Cronet_WebSocket_Create(engine_ptr, &callbacks, state_ptr)
+        };
+        if ws_ptr.is_null() {
+            return Err("Failed to create WebSocket".to_string());
+        }
+
+        Ok(CronetWebSocket {
+            ws_ptr,
+            _state: state,
+            rx,
+        })
+    }
+
+    pub fn connect(&self, url: &str, sub_protocols: Option<&str>, origin: Option<&str>) -> Result<(), String> {
+        let c_url = safe_cstring(url, "ws_url")?;
+        let c_protos = sub_protocols.map(|s| safe_cstring(s, "ws_sub_protocols")).transpose()?;
+        let c_origin = origin.map(|s| safe_cstring(s, "ws_origin")).transpose()?;
+
+        let ret = unsafe {
+            Cronet_WebSocket_Connect(
+                self.ws_ptr,
+                c_url.as_ptr(),
+                c_protos.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                c_origin.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+            )
+        };
+        if ret != 0 {
+            return Err(format!("WebSocket connect failed: {}", ret));
+        }
+        Ok(())
+    }
+
+    pub fn send_text(&self, text: &str) -> Result<(), String> {
+        let ret = unsafe {
+            Cronet_WebSocket_Send(
+                self.ws_ptr,
+                Cronet_WebSocket_MESSAGE_TEXT,
+                text.as_ptr() as *const c_void,
+                text.len() as u64,
+            )
+        };
+        if ret != 0 {
+            return Err(format!("WebSocket send failed: {}", ret));
+        }
+        Ok(())
+    }
+
+    pub fn send_binary(&self, data: &[u8]) -> Result<(), String> {
+        let ret = unsafe {
+            Cronet_WebSocket_Send(
+                self.ws_ptr,
+                Cronet_WebSocket_MESSAGE_BINARY,
+                data.as_ptr() as *const c_void,
+                data.len() as u64,
+            )
+        };
+        if ret != 0 {
+            return Err(format!("WebSocket send failed: {}", ret));
+        }
+        Ok(())
+    }
+
+    pub fn close(&self, code: u16, reason: &str) -> Result<(), String> {
+        let c_reason = safe_cstring(reason, "ws_close_reason")?;
+        let ret = unsafe {
+            Cronet_WebSocket_Close(self.ws_ptr, code, c_reason.as_ptr())
+        };
+        if ret != 0 {
+            return Err(format!("WebSocket close failed: {}", ret));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for CronetWebSocket {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.ws_ptr.is_null() {
+                Cronet_WebSocket_Destroy(self.ws_ptr);
+            }
+        }
     }
 }
