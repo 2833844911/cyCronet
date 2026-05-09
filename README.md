@@ -13,6 +13,7 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
 - 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
 - 📡 **流式响应（Streaming）支持（NEW！）**
+- 🔌 **WebSocket（WSS）支持，Chrome TLS 指纹（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -656,7 +657,154 @@ for line in response.iter_lines():
 response.close()
 ```
 
-## 🔧 高级配置
+## � WebSocket（WSS）支持
+
+Cycronet 内置 WebSocket 客户端，支持 WSS（TLS 加密）连接，同样使用 Chrome 的 TLS 指纹，适用于实时通信、推送消息等场景。
+
+### 基本用法
+
+```python
+import cycronet
+
+def on_open(ws):
+    print("连接已建立")
+    ws.send("Hello Server!")
+
+def on_message(ws, data, is_text):
+    if is_text:
+        print(f"收到文本: {data}")
+    else:
+        print(f"收到二进制: {len(data)} bytes")
+    ws.close()
+
+def on_close(ws, code, reason, was_clean):
+    print(f"连接关闭: code={code}, reason={reason}, clean={was_clean}")
+
+def on_error(ws, message, net_error):
+    print(f"错误: {message} (net_error={net_error})")
+
+# 创建 Session
+session = cycronet.CronetClient(verify=False)
+
+# 创建 WebSocket 连接
+ws = cycronet.WebSocketApp(
+    session,
+    "wss://example.com/ws",
+    on_open=on_open,
+    on_message=on_message,
+    on_close=on_close,
+    on_error=on_error,
+)
+
+# 阻塞运行（适合简单脚本）
+ws.run_forever()
+```
+
+### 后台运行（非阻塞）
+
+```python
+import cycronet
+import time
+
+session = cycronet.CronetClient(verify=False)
+ws = cycronet.WebSocketApp(
+    session,
+    "wss://example.com/ws",
+    on_open=lambda ws: ws.send("ping"),
+    on_message=lambda ws, data, is_text: print(f"收到: {data}"),
+    on_close=lambda ws, code, reason, was_clean: print("已关闭"),
+    on_error=lambda ws, msg, err: print(f"错误: {msg}"),
+)
+
+# 在后台线程运行
+ws.run_in_background()
+
+# 主线程继续做其他事情
+time.sleep(5)
+
+# 停止 WebSocket
+ws.stop()
+
+# 或者等待自然结束
+ws.wait(timeout=10)
+```
+
+### 发送二进制数据
+
+```python
+import cycronet
+
+def on_open(ws):
+    # 发送文本
+    ws.send("text message")
+    # 发送二进制
+    ws.send_bytes(b"\x00\x01\x02\x03")
+
+session = cycronet.CronetClient(verify=False)
+ws = cycronet.WebSocketApp(
+    session,
+    "wss://example.com/ws",
+    on_open=on_open,
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+```
+
+### 通过代理连接 WebSocket
+
+```python
+import cycronet
+
+# HTTP 代理
+session = cycronet.CronetClient(
+    verify=False,
+    proxies={"https": "http://127.0.0.1:8080"}
+)
+
+# 或 SOCKS5 代理
+session = cycronet.CronetClient(
+    verify=False,
+    proxies="socks5://username:password@127.0.0.1:1080"
+)
+
+ws = cycronet.WebSocketApp(
+    session,
+    "wss://example.com/ws",
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+```
+
+### WebSocketApp API 参考
+
+**回调函数签名：**
+
+| 回调 | 签名 | 说明 |
+|------|------|------|
+| `on_open` | `(ws)` | 连接建立时触发 |
+| `on_message` | `(ws, data, is_text)` | 收到消息，`is_text=True` 时 data 为字符串 |
+| `on_close` | `(ws, code, reason, was_clean)` | 连接关闭时触发 |
+| `on_error` | `(ws, message, net_error)` | 发生错误时触发 |
+
+**方法：**
+
+| 方法 | 说明 |
+|------|------|
+| `ws.send(text)` | 发送文本消息 |
+| `ws.send_bytes(data)` | 发送二进制消息 |
+| `ws.close(code=1000, reason="")` | 优雅关闭连接 |
+| `ws.stop()` | 强制停止事件循环 |
+| `ws.run_forever()` | 阻塞运行事件循环 |
+| `ws.run_in_background()` | 后台线程运行，返回 Thread 对象 |
+| `ws.wait(timeout=None)` | 等待后台线程结束 |
+| `ws.connected` | 属性，是否处于连接状态 |
+
+## �� 高级配置
 
 ### SSL 证书验证
 

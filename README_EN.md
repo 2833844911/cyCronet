@@ -15,6 +15,7 @@ The ultimate solution for browser request protocol fingerprint detection - this 
 - 🔐 **Custom TLS fingerprint configuration (NEW!)**
 - 🔌 **SOCKS5 proxy with username/password authentication (NEW!)**
 - 📡 **Streaming response support (NEW!)**
+- 🔌 **WebSocket (WSS) support with Chrome TLS fingerprint (NEW!)**
 
 ### Why Cycronet?
 
@@ -663,7 +664,154 @@ for line in response.iter_lines():
 response.close()
 ```
 
-## 🔧 Advanced Configuration
+## � WebSocket (WSS) Support
+
+Cycronet includes a built-in WebSocket client with WSS (TLS-encrypted) support, using Chrome's TLS fingerprint for real-time communication, push notifications, and more.
+
+### Basic Usage
+
+```python
+import cycronet
+
+def on_open(ws):
+    print("Connection established")
+    ws.send("Hello Server!")
+
+def on_message(ws, data, is_text):
+    if is_text:
+        print(f"Received text: {data}")
+    else:
+        print(f"Received binary: {len(data)} bytes")
+    ws.close()
+
+def on_close(ws, code, reason, was_clean):
+    print(f"Closed: code={code}, reason={reason}, clean={was_clean}")
+
+def on_error(ws, message, net_error):
+    print(f"Error: {message} (net_error={net_error})")
+
+# Create a session
+session = cycronet.CronetClient(verify=False)
+
+# Create WebSocket connection
+ws = cycronet.WebSocketApp(
+    session,
+    "wss://example.com/ws",
+    on_open=on_open,
+    on_message=on_message,
+    on_close=on_close,
+    on_error=on_error,
+)
+
+# Blocking run (suitable for simple scripts)
+ws.run_forever()
+```
+
+### Background Run (Non-blocking)
+
+```python
+import cycronet
+import time
+
+session = cycronet.CronetClient(verify=False)
+ws = cycronet.WebSocketApp(
+    session,
+    "wss://example.com/ws",
+    on_open=lambda ws: ws.send("ping"),
+    on_message=lambda ws, data, is_text: print(f"Received: {data}"),
+    on_close=lambda ws, code, reason, was_clean: print("Closed"),
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+
+# Run in background thread
+ws.run_in_background()
+
+# Main thread continues doing other work
+time.sleep(5)
+
+# Stop WebSocket
+ws.stop()
+
+# Or wait for natural completion
+ws.wait(timeout=10)
+```
+
+### Sending Binary Data
+
+```python
+import cycronet
+
+def on_open(ws):
+    # Send text
+    ws.send("text message")
+    # Send binary
+    ws.send_bytes(b"\x00\x01\x02\x03")
+
+session = cycronet.CronetClient(verify=False)
+ws = cycronet.WebSocketApp(
+    session,
+    "wss://example.com/ws",
+    on_open=on_open,
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+```
+
+### WebSocket with Proxy
+
+```python
+import cycronet
+
+# HTTP proxy
+session = cycronet.CronetClient(
+    verify=False,
+    proxies={"https": "http://127.0.0.1:8080"}
+)
+
+# Or SOCKS5 proxy
+session = cycronet.CronetClient(
+    verify=False,
+    proxies="socks5://username:password@127.0.0.1:1080"
+)
+
+ws = cycronet.WebSocketApp(
+    session,
+    "wss://example.com/ws",
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+```
+
+### WebSocketApp API Reference
+
+**Callback Signatures:**
+
+| Callback | Signature | Description |
+|----------|-----------|-------------|
+| `on_open` | `(ws)` | Triggered when connection is established |
+| `on_message` | `(ws, data, is_text)` | Message received; `data` is str when `is_text=True` |
+| `on_close` | `(ws, code, reason, was_clean)` | Triggered when connection closes |
+| `on_error` | `(ws, message, net_error)` | Triggered on error |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `ws.send(text)` | Send a text message |
+| `ws.send_bytes(data)` | Send a binary message |
+| `ws.close(code=1000, reason="")` | Graceful close |
+| `ws.stop()` | Force-stop the event loop |
+| `ws.run_forever()` | Block and run the event loop |
+| `ws.run_in_background()` | Run in background thread, returns Thread object |
+| `ws.wait(timeout=None)` | Wait for background thread to finish |
+| `ws.connected` | Property, whether currently connected |
+
+## �� Advanced Configuration
 
 ### SSL Certificate Verification
 

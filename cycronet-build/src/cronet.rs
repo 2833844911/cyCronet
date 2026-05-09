@@ -420,10 +420,13 @@ unsafe impl Send for CronetRequest {}
 impl Drop for CronetRequest {
     fn drop(&mut self) {
         unsafe {
+            // 保存原始指针用于从 pending_requests 移除
+            let original_ptr = self.ptr;
+
             // 从 pending_requests 列表中移除
             if let Some(ref pending) = self.pending_requests {
                 if let Ok(mut list) = pending.lock() {
-                    if let Some(pos) = list.iter().position(|&p| p == self.ptr) {
+                    if let Some(pos) = list.iter().position(|&p| p == original_ptr) {
                         list.swap_remove(pos);
                         verbose_log!("[DEBUG] CronetRequest::drop - Removed from pending list");
                     }
@@ -455,6 +458,10 @@ impl Drop for CronetRequest {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             }
+
+            // completed == true，等待 C++ 网络线程完成内部清理（MaybeReportMetrics 等）
+            // 避免 Destroy 与仍在执行的回调产生竞态导致 DCHECK(!in_dtor_) crash
+            std::thread::sleep(std::time::Duration::from_millis(50));
 
             // completed == true，可以安全销毁
             if !self.ptr.is_null() {
@@ -1022,6 +1029,9 @@ impl Drop for Session {
                         }
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
+
+                    // 额外等待，让 C++ 网络线程完成 MaybeReportMetrics 等内部清理
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
 
                 // 同步执行模式下不需要等待 executor 线程
@@ -1478,7 +1488,7 @@ unsafe extern "C" fn ws_on_message(
     let state = &*(user_data as *const WebSocketState);
     let slice = std::slice::from_raw_parts(data as *const u8, len as usize);
     let _ = state.tx.send(WebSocketEvent::Message {
-        is_text: msg_type == Cronet_WebSocket_MESSAGE_TEXT,
+        is_text: msg_type == Cronet_WebSocket_MessageType_Cronet_WebSocket_MESSAGE_TEXT,
         data: slice.to_vec(),
     });
 }
@@ -1582,7 +1592,7 @@ impl CronetWebSocket {
         let ret = unsafe {
             Cronet_WebSocket_Send(
                 self.ws_ptr,
-                Cronet_WebSocket_MESSAGE_TEXT,
+                Cronet_WebSocket_MessageType_Cronet_WebSocket_MESSAGE_TEXT,
                 text.as_ptr() as *const c_void,
                 text.len() as u64,
             )
@@ -1597,7 +1607,7 @@ impl CronetWebSocket {
         let ret = unsafe {
             Cronet_WebSocket_Send(
                 self.ws_ptr,
-                Cronet_WebSocket_MESSAGE_BINARY,
+                Cronet_WebSocket_MessageType_Cronet_WebSocket_MESSAGE_BINARY,
                 data.as_ptr() as *const c_void,
                 data.len() as u64,
             )

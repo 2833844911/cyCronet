@@ -74,7 +74,7 @@ fn main() {
         let bindings = bindgen::Builder::default()
             .header_contents(
                 "wrapper.h",
-                "#include <stdbool.h>\n#include \"cronet.idl_c.h\"",
+                "#include <stdbool.h>\n#include \"cronet.idl_c.h\"\n#include \"cronet_websocket_c.h\"",
             )
             .clang_arg(format!("-I{}", include_dir.display()))
             .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
