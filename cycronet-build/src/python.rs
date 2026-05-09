@@ -5,7 +5,7 @@ use std::time::Duration;
 use pyo3_async_runtimes::tokio::future_into_py;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::cronet::{SessionConfig, SessionManager, StreamChunk, CronetRequest};
+use crate::cronet::{SessionConfig, SessionManager, StreamChunk, CronetRequest, CronetWebSocket, WebSocketEvent};
 use crate::cronet_pb::{Header, TargetRequest};
 
 /// Python wrapper for SessionManager
@@ -434,6 +434,31 @@ impl PyCronetClient {
     fn list_sessions(&self) -> PyResult<Vec<String>> {
         Ok(self.manager.list_sessions())
     }
+
+    /// Create a WebSocket connection using a session
+    ///
+    /// Args:
+    ///     session_id: Session ID
+    ///     url: WebSocket URL (ws:// or wss://)
+    ///
+    /// Returns:
+    ///     PyCronetWebSocket instance
+    fn websocket_connect(&self, session_id: String, url: String) -> PyResult<PyCronetWebSocket> {
+        let engine_ptr = self.manager.get_engine_ptr(&session_id)
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                format!("Session not found: {}", session_id)
+            ))?;
+
+        let ws = CronetWebSocket::new(engine_ptr)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+
+        ws.connect(&url, None, None)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+
+        Ok(PyCronetWebSocket {
+            inner: Arc::new(StdMutex::new(Some(ws))),
+        })
+    }
 }
 
 /// Python wrapper for streaming response reader
@@ -544,11 +569,97 @@ impl PyStreamReader {
     }
 }
 
+/// Python-visible WebSocket handle
+#[pyclass]
+pub struct PyCronetWebSocket {
+    inner: Arc<StdMutex<Option<CronetWebSocket>>>,
+}
+
+#[pymethods]
+impl PyCronetWebSocket {
+    /// Send a text message
+    fn send(&self, message: String) -> PyResult<()> {
+        let guard = self.inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
+        let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
+        ws.send_text(&message).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+    }
+
+    /// Send binary data
+    fn send_bytes(&self, data: Vec<u8>) -> PyResult<()> {
+        let guard = self.inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
+        let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
+        ws.send_binary(&data).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+    }
+
+    /// Initiate graceful close
+    fn close(&self, code: u16, reason: String) -> PyResult<()> {
+        let guard = self.inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
+        let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
+        ws.close(code, &reason).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+    }
+
+    /// Blocking receive next event (releases GIL)
+    fn recv(&self, py: Python) -> PyResult<PyObject> {
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            let guard = inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
+            let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
+            ws.rx.recv().map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Channel closed"))
+        }).and_then(|evt| Python::with_gil(|py| ws_event_to_dict(py, evt)))
+    }
+
+    /// Receive with timeout in milliseconds (releases GIL). Returns None on timeout.
+    fn recv_timeout(&self, py: Python, timeout_ms: u64) -> PyResult<Option<PyObject>> {
+        let inner = self.inner.clone();
+        let result = py.allow_threads(|| {
+            let guard = inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
+            let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
+            Ok::<Option<WebSocketEvent>, PyErr>(ws.rx.recv_timeout(Duration::from_millis(timeout_ms)).ok())
+        })?;
+        match result {
+            Some(evt) => Python::with_gil(|py| ws_event_to_dict(py, evt).map(Some)),
+            None => Ok(None),
+        }
+    }
+}
+
+fn ws_event_to_dict(py: Python, evt: WebSocketEvent) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    match evt {
+        WebSocketEvent::Open { protocol } => {
+            dict.set_item("type", "open")?;
+            dict.set_item("protocol", protocol)?;
+        }
+        WebSocketEvent::Message { is_text, data } => {
+            dict.set_item("type", "message")?;
+            dict.set_item("is_text", is_text)?;
+            if is_text {
+                dict.set_item("data", String::from_utf8_lossy(&data).into_owned())?;
+            } else {
+                dict.set_item("data", PyBytes::new_bound(py, &data))?;
+            }
+        }
+        WebSocketEvent::Close { was_clean, code, reason } => {
+            dict.set_item("type", "close")?;
+            dict.set_item("was_clean", was_clean)?;
+            dict.set_item("code", code)?;
+            dict.set_item("reason", reason)?;
+        }
+        WebSocketEvent::Error { net_error, message } => {
+            dict.set_item("type", "error")?;
+            dict.set_item("net_error", net_error)?;
+            dict.set_item("message", message)?;
+        }
+    }
+    Ok(dict.into())
+}
+
 /// Python module
 #[pymodule]
 fn cronet_cloak(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCronetClient>()?;
     m.add_class::<PyStreamReader>()?;
+    m.add_class::<PyCronetWebSocket>()?;
     Ok(())
 }
 
