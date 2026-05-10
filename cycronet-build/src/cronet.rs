@@ -1023,9 +1023,12 @@ impl Drop for Session {
                     let start = std::time::Instant::now();
                     while self.active_requests.load(Ordering::Acquire) > 0 {
                         if start.elapsed() > std::time::Duration::from_secs(5) {
-                            eprintln!("[WARN] Session::drop - Timeout waiting for {} active requests after cancellation",
+                            eprintln!("[WARN] Session::drop - Timeout waiting for {} active requests after cancellation, leaking engine to avoid crash",
                                 self.active_requests.load(Ordering::Acquire));
-                            break;
+                            // 网络线程仍持有引用，不能销毁 Engine，否则会 use-after-free crash。
+                            // 泄漏 Engine 内存，但避免崩溃。
+                            self.engine_ptr = std::ptr::null_mut();
+                            return;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
@@ -1034,7 +1037,7 @@ impl Drop for Session {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
 
-                // 同步执行模式下不需要等待 executor 线程
+                // 所有请求已完成，安全销毁 engine
                 verbose_log!("[DEBUG] Session::drop - Calling Cronet_Engine_Shutdown");
                 Cronet_Engine_Shutdown(self.engine_ptr);
 
@@ -1415,7 +1418,13 @@ impl SessionManager {
 
     /// 关闭会话
     pub fn close_session(&self, session_id: &str) -> bool {
-        let mut sessions = self.sessions.write().unwrap();
+        let mut sessions = match self.sessions.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                eprintln!("[WARN] close_session: RwLock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
         if sessions.remove(session_id).is_some() {
             verbose_log!("[DEBUG] Closed session: {}", session_id);
             true
@@ -1427,17 +1436,26 @@ impl SessionManager {
 
     /// 列出所有会话ID
     pub fn list_sessions(&self) -> Vec<String> {
-        self.sessions.read().unwrap().keys().cloned().collect()
+        match self.sessions.read() {
+            Ok(guard) => guard.keys().cloned().collect(),
+            Err(poisoned) => poisoned.into_inner().keys().cloned().collect(),
+        }
     }
 
     /// 获取会话数量
     pub fn session_count(&self) -> usize {
-        self.sessions.read().unwrap().len()
+        match self.sessions.read() {
+            Ok(guard) => guard.len(),
+            Err(poisoned) => poisoned.into_inner().len(),
+        }
     }
 
     /// 检查会话是否存在
     pub fn session_exists(&self, session_id: &str) -> bool {
-        self.sessions.read().unwrap().contains_key(session_id)
+        match self.sessions.read() {
+            Ok(guard) => guard.contains_key(session_id),
+            Err(poisoned) => poisoned.into_inner().contains_key(session_id),
+        }
     }
 
     /// 获取 session 的 engine_ptr（供 WebSocket 使用）

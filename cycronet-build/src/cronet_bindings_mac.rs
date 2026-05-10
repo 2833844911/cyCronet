@@ -1839,6 +1839,10 @@ pub const Cronet_WebSocket_MESSAGE_TEXT: u32 = 1;
 pub const Cronet_WebSocket_MESSAGE_BINARY: u32 = 2;
 pub type Cronet_WebSocket_MessageType = u32;
 
+// Aliases matching bindgen-generated names (used by cronet.rs)
+pub const Cronet_WebSocket_MessageType_Cronet_WebSocket_MESSAGE_TEXT: Cronet_WebSocket_MessageType = 1;
+pub const Cronet_WebSocket_MessageType_Cronet_WebSocket_MESSAGE_BINARY: Cronet_WebSocket_MessageType = 2;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Cronet_WebSocket_Callbacks {

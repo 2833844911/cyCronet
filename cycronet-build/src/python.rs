@@ -592,6 +592,7 @@ impl PyCronetWebSocket {
     }
 
     /// Initiate graceful close
+    #[pyo3(signature = (code=1000, reason="".to_string()))]
     fn close(&self, code: u16, reason: String) -> PyResult<()> {
         let guard = self.inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
         let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
@@ -606,6 +607,15 @@ impl PyCronetWebSocket {
             let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
             ws.rx.recv().map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Channel closed"))
         }).and_then(|evt| Python::with_gil(|py| ws_event_to_dict(py, evt)))
+    }
+
+    /// Explicitly destroy the underlying WebSocket (releases socket back to pool).
+    /// Must be called before close_session to avoid crashes.
+    fn destroy(&self) -> PyResult<()> {
+        let mut guard = self.inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
+        // Take and drop the CronetWebSocket, which calls Cronet_WebSocket_Destroy
+        let _ = guard.take();
+        Ok(())
     }
 
     /// Receive with timeout in milliseconds (releases GIL). Returns None on timeout.
