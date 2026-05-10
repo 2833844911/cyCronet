@@ -13,6 +13,8 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
 - 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
 - 📡 **流式响应（Streaming）支持（NEW！）**
+- 🔌 **WebSocket（WSS）支持，Chrome TLS 指纹（NEW！）**
+- 📨 **WebSocket 自定义 Headers 注入（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -737,6 +739,98 @@ response = cycronet.get('https://example.com', headers=headers, verify=False)
 - **字典（dict）**：Python 3.7+ 虽然保持插入顺序，但在某些情况下可能被重新排序
 - **数组（list of tuples）**：严格保持定义的顺序，确保 Headers 按你指定的顺序发送
 - 真实浏览器的 Headers 顺序是固定的，使用数组可以完美模拟
+
+## 🔌 WebSocket（WSS）支持
+
+Cycronet 内置 WebSocket 客户端，支持 WSS（TLS 加密）连接，同样使用 Chrome 的 TLS 指纹。
+
+### 基本用法
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+ws = session.websocket(
+    "wss://example.com/ws",
+    on_open=lambda ws: ws.send("Hello!"),
+    on_message=lambda ws, data, is_text: print(f"收到: {data}"),
+    on_close=lambda ws, code, reason, was_clean: print(f"关闭: {code}"),
+    on_error=lambda ws, msg, err: print(f"错误: {msg}"),
+)
+ws.run_forever()
+session.close()
+```
+
+### 自定义 WebSocket Headers
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+ws = session.websocket(
+    "wss://example.com/ws",
+    headers=[
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/144.0.0.0 Safari/537.36"),
+        ("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8"),
+        ("Cache-Control", "no-cache"),
+        ("Pragma", "no-cache"),
+    ],
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+session.close()
+```
+
+> **注意：** 默认情况下 WebSocket 握手请求**不会**自动添加 `Pragma: no-cache` 和 `Cache-Control: no-cache`。如需要请通过 `headers` 参数显式设置。
+
+### WebSocket + 代理
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(
+    verify=False,
+    proxies={"https": "http://127.0.0.1:8080"}
+)
+ws = session.websocket(
+    "wss://example.com/ws",
+    headers=[("User-Agent", "MyApp/1.0")],
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+session.close()
+```
+
+### WebSocket API 参考
+
+```python
+ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None)
+```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `url` | `str` | WebSocket URL（`ws://` 或 `wss://`） |
+| `on_open` | `callable` | 连接建立 `(ws)` |
+| `on_message` | `callable` | 收到消息 `(ws, data, is_text)` |
+| `on_close` | `callable` | 连接关闭 `(ws, code, reason, was_clean)` |
+| `on_error` | `callable` | 发生错误 `(ws, message, net_error)` |
+| `headers` | `list[tuple]` | 自定义 HTTP Headers，如 `[("User-Agent", "...")]` |
+
+| 方法 | 说明 |
+|------|------|
+| `ws.send(text)` | 发送文本消息 |
+| `ws.send_bytes(data)` | 发送二进制消息 |
+| `ws.close(code=1000, reason="")` | 优雅关闭连接 |
+| `ws.run_forever()` | 阻塞运行 |
+| `ws.run_in_background()` | 后台运行 |
+| `ws.wait(timeout=None)` | 等待结束 |
+| `ws.connected` | 是否连接中 |
 
 ## 📊 性能对比
 

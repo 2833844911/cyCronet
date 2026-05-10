@@ -14,6 +14,7 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
 - 📡 **流式响应（Streaming）支持（NEW！）**
 - 🔌 **WebSocket（WSS）支持，Chrome TLS 指纹（NEW！）**
+- 📨 **WebSocket 自定义 Headers 注入（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -657,11 +658,13 @@ for line in response.iter_lines():
 response.close()
 ```
 
-## � WebSocket（WSS）支持
+## 🔌 WebSocket（WSS）支持
 
 Cycronet 内置 WebSocket 客户端，支持 WSS（TLS 加密）连接，同样使用 Chrome 的 TLS 指纹，适用于实时通信、推送消息等场景。
 
-### 基本用法
+> **推荐使用 `session.websocket()` 方法**（更简洁，自动管理 Session）。
+
+### 基本用法（推荐）
 
 ```python
 import cycronet
@@ -683,12 +686,9 @@ def on_close(ws, code, reason, was_clean):
 def on_error(ws, message, net_error):
     print(f"错误: {message} (net_error={net_error})")
 
-# 创建 Session
+# 创建 Session 并使用 session.websocket()
 session = cycronet.CronetClient(verify=False)
-
-# 创建 WebSocket 连接
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=on_open,
     on_message=on_message,
@@ -698,7 +698,36 @@ ws = cycronet.WebSocketApp(
 
 # 阻塞运行（适合简单脚本）
 ws.run_forever()
+session.close()
 ```
+
+### 自定义 WebSocket Headers
+
+WebSocket 握手请求支持注入自定义 HTTP Headers，例如 `User-Agent`、`Accept-Language` 等，用于绕过 WebSocket 服务器的请求头检测：
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+ws = session.websocket(
+    "wss://example.com/ws",
+    headers=[
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"),
+        ("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8"),
+        ("Accept-Encoding", "gzip, deflate, br, zstd"),
+        ("Cache-Control", "no-cache"),
+        ("Pragma", "no-cache"),
+    ],
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+session.close()
+```
+
+> **注意：** 默认情况下 WebSocket 握手请求**不会**自动添加 `Pragma: no-cache` 和 `Cache-Control: no-cache`。如果需要这些 Headers，请通过 `headers` 参数显式设置。
 
 ### 后台运行（非阻塞）
 
@@ -707,8 +736,7 @@ import cycronet
 import time
 
 session = cycronet.CronetClient(verify=False)
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=lambda ws: ws.send("ping"),
     on_message=lambda ws, data, is_text: print(f"收到: {data}"),
@@ -727,6 +755,7 @@ ws.stop()
 
 # 或者等待自然结束
 ws.wait(timeout=10)
+session.close()
 ```
 
 ### 发送二进制数据
@@ -735,14 +764,11 @@ ws.wait(timeout=10)
 import cycronet
 
 def on_open(ws):
-    # 发送文本
     ws.send("text message")
-    # 发送二进制
     ws.send_bytes(b"\x00\x01\x02\x03")
 
 session = cycronet.CronetClient(verify=False)
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=on_open,
     on_message=lambda ws, data, is_text: print(data),
@@ -750,6 +776,7 @@ ws = cycronet.WebSocketApp(
     on_error=lambda ws, msg, err: print(f"Error: {msg}"),
 )
 ws.run_forever()
+session.close()
 ```
 
 ### 通过代理连接 WebSocket
@@ -769,27 +796,35 @@ session = cycronet.CronetClient(
     proxies="socks5://username:password@127.0.0.1:1080"
 )
 
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
+    headers=[("User-Agent", "MyApp/1.0")],
     on_open=lambda ws: ws.send("hello"),
     on_message=lambda ws, data, is_text: print(data),
     on_close=lambda ws, code, reason, was_clean: None,
     on_error=lambda ws, msg, err: print(f"Error: {msg}"),
 )
 ws.run_forever()
+session.close()
 ```
 
 ### WebSocketApp API 参考
 
-**回调函数签名：**
+**创建方式：**
 
-| 回调 | 签名 | 说明 |
+```python
+# 推荐：通过 session.websocket()
+ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None)
+```
+
+| 参数 | 类型 | 说明 |
 |------|------|------|
-| `on_open` | `(ws)` | 连接建立时触发 |
-| `on_message` | `(ws, data, is_text)` | 收到消息，`is_text=True` 时 data 为字符串 |
-| `on_close` | `(ws, code, reason, was_clean)` | 连接关闭时触发 |
-| `on_error` | `(ws, message, net_error)` | 发生错误时触发 |
+| `url` | `str` | WebSocket URL（`ws://` 或 `wss://`） |
+| `on_open` | `callable` | 连接建立时触发 `(ws)` |
+| `on_message` | `callable` | 收到消息 `(ws, data, is_text)` |
+| `on_close` | `callable` | 连接关闭 `(ws, code, reason, was_clean)` |
+| `on_error` | `callable` | 发生错误 `(ws, message, net_error)` |
+| `headers` | `list[tuple]` | 自定义 HTTP Headers，如 `[("User-Agent", "...")]` |
 
 **方法：**
 

@@ -16,6 +16,7 @@ The ultimate solution for browser request protocol fingerprint detection - this 
 - 🔌 **SOCKS5 proxy with username/password authentication (NEW!)**
 - 📡 **Streaming response support (NEW!)**
 - 🔌 **WebSocket (WSS) support with Chrome TLS fingerprint (NEW!)**
+- 📨 **WebSocket custom Headers injection (NEW!)**
 
 ### Why Cycronet?
 
@@ -664,11 +665,13 @@ for line in response.iter_lines():
 response.close()
 ```
 
-## � WebSocket (WSS) Support
+## 🔌 WebSocket (WSS) Support
 
 Cycronet includes a built-in WebSocket client with WSS (TLS-encrypted) support, using Chrome's TLS fingerprint for real-time communication, push notifications, and more.
 
-### Basic Usage
+> **Recommended: use `session.websocket()` method** (simpler, auto-manages session).
+
+### Basic Usage (Recommended)
 
 ```python
 import cycronet
@@ -690,12 +693,9 @@ def on_close(ws, code, reason, was_clean):
 def on_error(ws, message, net_error):
     print(f"Error: {message} (net_error={net_error})")
 
-# Create a session
+# Create Session and use session.websocket()
 session = cycronet.CronetClient(verify=False)
-
-# Create WebSocket connection
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=on_open,
     on_message=on_message,
@@ -705,7 +705,36 @@ ws = cycronet.WebSocketApp(
 
 # Blocking run (suitable for simple scripts)
 ws.run_forever()
+session.close()
 ```
+
+### Custom WebSocket Headers
+
+WebSocket handshake requests support custom HTTP header injection, such as `User-Agent`, `Accept-Language`, etc., for bypassing WebSocket server request header detection:
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+ws = session.websocket(
+    "wss://example.com/ws",
+    headers=[
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"),
+        ("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8"),
+        ("Accept-Encoding", "gzip, deflate, br, zstd"),
+        ("Cache-Control", "no-cache"),
+        ("Pragma", "no-cache"),
+    ],
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+session.close()
+```
+
+> **Note:** By default, WebSocket handshake requests **do not** automatically add `Pragma: no-cache` and `Cache-Control: no-cache`. If you need these headers, set them explicitly via the `headers` parameter.
 
 ### Background Run (Non-blocking)
 
@@ -714,8 +743,7 @@ import cycronet
 import time
 
 session = cycronet.CronetClient(verify=False)
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=lambda ws: ws.send("ping"),
     on_message=lambda ws, data, is_text: print(f"Received: {data}"),
@@ -734,6 +762,7 @@ ws.stop()
 
 # Or wait for natural completion
 ws.wait(timeout=10)
+session.close()
 ```
 
 ### Sending Binary Data
@@ -742,14 +771,11 @@ ws.wait(timeout=10)
 import cycronet
 
 def on_open(ws):
-    # Send text
     ws.send("text message")
-    # Send binary
     ws.send_bytes(b"\x00\x01\x02\x03")
 
 session = cycronet.CronetClient(verify=False)
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=on_open,
     on_message=lambda ws, data, is_text: print(data),
@@ -757,6 +783,7 @@ ws = cycronet.WebSocketApp(
     on_error=lambda ws, msg, err: print(f"Error: {msg}"),
 )
 ws.run_forever()
+session.close()
 ```
 
 ### WebSocket with Proxy
@@ -776,27 +803,35 @@ session = cycronet.CronetClient(
     proxies="socks5://username:password@127.0.0.1:1080"
 )
 
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
+    headers=[("User-Agent", "MyApp/1.0")],
     on_open=lambda ws: ws.send("hello"),
     on_message=lambda ws, data, is_text: print(data),
     on_close=lambda ws, code, reason, was_clean: None,
     on_error=lambda ws, msg, err: print(f"Error: {msg}"),
 )
 ws.run_forever()
+session.close()
 ```
 
 ### WebSocketApp API Reference
 
-**Callback Signatures:**
+**Creation:**
 
-| Callback | Signature | Description |
-|----------|-----------|-------------|
-| `on_open` | `(ws)` | Triggered when connection is established |
-| `on_message` | `(ws, data, is_text)` | Message received; `data` is str when `is_text=True` |
-| `on_close` | `(ws, code, reason, was_clean)` | Triggered when connection closes |
-| `on_error` | `(ws, message, net_error)` | Triggered on error |
+```python
+# Recommended: via session.websocket()
+ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `url` | `str` | WebSocket URL (`ws://` or `wss://`) |
+| `on_open` | `callable` | Triggered on connect `(ws)` |
+| `on_message` | `callable` | Message received `(ws, data, is_text)` |
+| `on_close` | `callable` | Connection closed `(ws, code, reason, was_clean)` |
+| `on_error` | `callable` | Error occurred `(ws, message, net_error)` |
+| `headers` | `list[tuple]` | Custom HTTP Headers, e.g. `[("User-Agent", "...")]` |
 
 **Methods:**
 
