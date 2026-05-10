@@ -14,6 +14,7 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
 - 📡 **流式响应（Streaming）支持（NEW！）**
 - 🔌 **WebSocket（WSS）支持，Chrome TLS 指纹（NEW！）**
+- 🌐 **WebSocket 自定义 Headers，完全控制握手请求头（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -657,11 +658,11 @@ for line in response.iter_lines():
 response.close()
 ```
 
-## � WebSocket（WSS）支持
+## 🔌 WebSocket（WSS）支持
 
 Cycronet 内置 WebSocket 客户端，支持 WSS（TLS 加密）连接，同样使用 Chrome 的 TLS 指纹，适用于实时通信、推送消息等场景。
 
-### 基本用法
+### 基本用法（推荐 session.websocket()）
 
 ```python
 import cycronet
@@ -686,9 +687,8 @@ def on_error(ws, message, net_error):
 # 创建 Session
 session = cycronet.CronetClient(verify=False)
 
-# 创建 WebSocket 连接
-ws = cycronet.WebSocketApp(
-    session,
+# 创建 WebSocket 连接（推荐方式）
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=on_open,
     on_message=on_message,
@@ -700,6 +700,35 @@ ws = cycronet.WebSocketApp(
 ws.run_forever()
 ```
 
+### 自定义 Headers（控制握手请求头）
+
+WSS 连接支持自定义 HTTP Headers，可以完全控制 WebSocket 升级请求的请求头顺序和内容，与 HTTPS 请求一样灵活：
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+
+ws = session.websocket(
+    "wss://example.com/ws",
+    headers=[
+        ("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/147.0.0.0 Safari/537.36"),
+        ("Accept-Language", "zh-CN,zh;q=0.9"),
+        ("Accept-Encoding", "gzip, deflate, br, zstd"),
+        ("Sec-WebSocket-Extensions", "permessage-deflate"),
+    ],
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+```
+
+> **说明**：`headers` 参数接受 `(name, value)` 元组列表，Headers 会按指定顺序添加到 WebSocket HTTP 升级请求中。不设置 `headers` 时使用 Chromium 默认行为。
+
 ### 后台运行（非阻塞）
 
 ```python
@@ -707,8 +736,7 @@ import cycronet
 import time
 
 session = cycronet.CronetClient(verify=False)
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=lambda ws: ws.send("ping"),
     on_message=lambda ws, data, is_text: print(f"收到: {data}"),
@@ -741,8 +769,7 @@ def on_open(ws):
     ws.send_bytes(b"\x00\x01\x02\x03")
 
 session = cycronet.CronetClient(verify=False)
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=on_open,
     on_message=lambda ws, data, is_text: print(data),
@@ -769,9 +796,11 @@ session = cycronet.CronetClient(
     proxies="socks5://username:password@127.0.0.1:1080"
 )
 
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
+    headers=[
+        ("User-Agent", "Mozilla/5.0 Chrome/147.0.0.0"),
+    ],
     on_open=lambda ws: ws.send("hello"),
     on_message=lambda ws, data, is_text: print(data),
     on_close=lambda ws, code, reason, was_clean: None,
@@ -803,6 +832,17 @@ ws.run_forever()
 | `ws.run_in_background()` | 后台线程运行，返回 Thread 对象 |
 | `ws.wait(timeout=None)` | 等待后台线程结束 |
 | `ws.connected` | 属性，是否处于连接状态 |
+
+**`session.websocket()` 参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `url` | `str` | WebSocket URL（ws:// 或 wss://） |
+| `on_open` | `callable` | 连接建立回调 |
+| `on_message` | `callable` | 消息接收回调 |
+| `on_close` | `callable` | 连接关闭回调 |
+| `on_error` | `callable` | 错误回调 |
+| `headers` | `list[tuple]` | 自定义 HTTP 请求头，如 `[("Name", "Value")]` |
 
 ## �� 高级配置
 

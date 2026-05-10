@@ -443,7 +443,8 @@ impl PyCronetClient {
     ///
     /// Returns:
     ///     PyCronetWebSocket instance
-    fn websocket_connect(&self, session_id: String, url: String) -> PyResult<PyCronetWebSocket> {
+    #[pyo3(signature = (session_id, url, extra_headers=None))]
+    fn websocket_connect(&self, session_id: String, url: String, extra_headers: Option<Vec<(String, String)>>) -> PyResult<PyCronetWebSocket> {
         let engine_ptr = self.manager.get_engine_ptr(&session_id)
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 format!("Session not found: {}", session_id)
@@ -452,7 +453,15 @@ impl PyCronetClient {
         let ws = CronetWebSocket::new(engine_ptr)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
-        ws.connect(&url, None, None)
+        // Build "\r\n"-delimited header string from list of (name, value) tuples
+        let headers_str = extra_headers.map(|hdrs| {
+            hdrs.iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>()
+                .join("\r\n")
+        });
+
+        ws.connect(&url, None, None, headers_str.as_deref())
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
         Ok(PyCronetWebSocket {

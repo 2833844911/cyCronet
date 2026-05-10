@@ -16,6 +16,7 @@ The ultimate solution for browser request protocol fingerprint detection - this 
 - 🔌 **SOCKS5 proxy with username/password authentication (NEW!)**
 - 📡 **Streaming response support (NEW!)**
 - 🔌 **WebSocket (WSS) support with Chrome TLS fingerprint (NEW!)**
+- 🌐 **WebSocket custom Headers for full control over handshake request (NEW!)**
 
 ### Why Cycronet?
 
@@ -664,11 +665,11 @@ for line in response.iter_lines():
 response.close()
 ```
 
-## � WebSocket (WSS) Support
+## 🔌 WebSocket (WSS) Support
 
 Cycronet includes a built-in WebSocket client with WSS (TLS-encrypted) support, using Chrome's TLS fingerprint for real-time communication, push notifications, and more.
 
-### Basic Usage
+### Basic Usage (Recommended: session.websocket())
 
 ```python
 import cycronet
@@ -693,9 +694,8 @@ def on_error(ws, message, net_error):
 # Create a session
 session = cycronet.CronetClient(verify=False)
 
-# Create WebSocket connection
-ws = cycronet.WebSocketApp(
-    session,
+# Create WebSocket connection (recommended)
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=on_open,
     on_message=on_message,
@@ -707,6 +707,35 @@ ws = cycronet.WebSocketApp(
 ws.run_forever()
 ```
 
+### Custom Headers (Control Handshake Request)
+
+WSS connections support custom HTTP Headers, giving you full control over the WebSocket upgrade request headers - just like HTTPS requests:
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+
+ws = session.websocket(
+    "wss://example.com/ws",
+    headers=[
+        ("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/147.0.0.0 Safari/537.36"),
+        ("Accept-Language", "zh-CN,zh;q=0.9"),
+        ("Accept-Encoding", "gzip, deflate, br, zstd"),
+        ("Sec-WebSocket-Extensions", "permessage-deflate"),
+    ],
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+```
+
+> **Note**: The `headers` parameter accepts a list of `(name, value)` tuples. Headers are added to the WebSocket HTTP upgrade request in the exact order specified. When `headers` is not set, Chromium defaults are used.
+
 ### Background Run (Non-blocking)
 
 ```python
@@ -714,8 +743,7 @@ import cycronet
 import time
 
 session = cycronet.CronetClient(verify=False)
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=lambda ws: ws.send("ping"),
     on_message=lambda ws, data, is_text: print(f"Received: {data}"),
@@ -748,8 +776,7 @@ def on_open(ws):
     ws.send_bytes(b"\x00\x01\x02\x03")
 
 session = cycronet.CronetClient(verify=False)
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
     on_open=on_open,
     on_message=lambda ws, data, is_text: print(data),
@@ -776,9 +803,11 @@ session = cycronet.CronetClient(
     proxies="socks5://username:password@127.0.0.1:1080"
 )
 
-ws = cycronet.WebSocketApp(
-    session,
+ws = session.websocket(
     "wss://example.com/ws",
+    headers=[
+        ("User-Agent", "Mozilla/5.0 Chrome/147.0.0.0"),
+    ],
     on_open=lambda ws: ws.send("hello"),
     on_message=lambda ws, data, is_text: print(data),
     on_close=lambda ws, code, reason, was_clean: None,
@@ -810,6 +839,17 @@ ws.run_forever()
 | `ws.run_in_background()` | Run in background thread, returns Thread object |
 | `ws.wait(timeout=None)` | Wait for background thread to finish |
 | `ws.connected` | Property, whether currently connected |
+
+**`session.websocket()` Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `url` | `str` | WebSocket URL (ws:// or wss://) |
+| `on_open` | `callable` | Connection established callback |
+| `on_message` | `callable` | Message received callback |
+| `on_close` | `callable` | Connection closed callback |
+| `on_error` | `callable` | Error callback |
+| `headers` | `list[tuple]` | Custom HTTP headers, e.g. `[("Name", "Value")]` |
 
 ## �� Advanced Configuration
 

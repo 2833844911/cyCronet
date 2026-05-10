@@ -54,6 +54,7 @@ class WebSocketApp:
         on_message: Optional[Callable] = None,
         on_close: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
+        headers: Optional[list] = None,
         session_id: Optional[str] = None,
     ):
         self._client = client
@@ -62,6 +63,7 @@ class WebSocketApp:
         self.on_message = on_message
         self.on_close = on_close
         self.on_error = on_error
+        self._headers = headers  # list of (name, value) tuples
 
         self._session_id = session_id
         self._own_session = session_id is None
@@ -143,7 +145,7 @@ class WebSocketApp:
         self._session_id = session._session_id
         raw_client = session._client._client
         self._raw_ws = raw_client.websocket_connect(
-            self._session_id, self._url
+            self._session_id, self._url, self._headers
         )
 
     def _event_loop(self, recv_timeout_ms: int):

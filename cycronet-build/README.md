@@ -13,6 +13,8 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
 - 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
 - 📡 **流式响应（Streaming）支持（NEW！）**
+- 🔌 **WebSocket（WSS）支持，Chrome TLS 指纹（NEW！）**
+- 🌐 **WebSocket 自定义 Headers，完全控制握手请求头（NEW！）**
 
 ### 为什么需要 Cycronet？
 
@@ -500,6 +502,90 @@ response = cycronet.get('https://httpbin.org/ip', proxies=proxies, verify=False)
 ```
 
 详细用法请参考 [README.md](../README.md)
+
+## 🔌 WebSocket（WSS）支持
+
+### 基本用法
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+
+ws = session.websocket(
+    "wss://example.com/ws",
+    on_open=lambda ws: ws.send("Hello!"),
+    on_message=lambda ws, data, is_text: print(f"收到: {data}"),
+    on_close=lambda ws, code, reason, was_clean: print(f"关闭: {code}"),
+    on_error=lambda ws, msg, err: print(f"错误: {msg}"),
+)
+ws.run_forever()
+```
+
+### 自定义 Headers
+
+```python
+import cycronet
+
+session = cycronet.CronetClient(verify=False)
+
+ws = session.websocket(
+    "wss://example.com/ws",
+    headers=[
+        ("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 Chrome/147.0.0.0 Safari/537.36"),
+        ("Accept-Language", "zh-CN,zh;q=0.9"),
+        ("Accept-Encoding", "gzip, deflate, br, zstd"),
+    ],
+    on_open=lambda ws: ws.send("hello"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_forever()
+```
+
+### 后台运行 + 代理
+
+```python
+import cycronet
+import time
+
+session = cycronet.CronetClient(
+    verify=False,
+    proxies="socks5://user:pass@127.0.0.1:1080"
+)
+
+ws = session.websocket(
+    "wss://example.com/ws",
+    headers=[("User-Agent", "Mozilla/5.0 Chrome/147.0.0.0")],
+    on_open=lambda ws: ws.send("ping"),
+    on_message=lambda ws, data, is_text: print(data),
+    on_close=lambda ws, code, reason, was_clean: None,
+    on_error=lambda ws, msg, err: print(f"Error: {msg}"),
+)
+ws.run_in_background()
+time.sleep(5)
+ws.stop()
+```
+
+### WebSocket API
+
+| 方法 | 说明 |
+|------|------|
+| `ws.send(text)` | 发送文本消息 |
+| `ws.send_bytes(data)` | 发送二进制消息 |
+| `ws.close(code=1000, reason="")` | 优雅关闭连接 |
+| `ws.run_forever()` | 阻塞运行 |
+| `ws.run_in_background()` | 后台线程运行 |
+| `ws.wait(timeout=None)` | 等待结束 |
+| `ws.stop()` | 强制停止 |
+
+| `session.websocket()` 参数 | 类型 | 说明 |
+|------|------|------|
+| `url` | `str` | ws:// 或 wss:// |
+| `on_open/on_message/on_close/on_error` | `callable` | 回调函数 |
+| `headers` | `list[tuple]` | 自定义 HTTP 请求头 `[("Name", "Value")]` |
 
 ## 📡 流式响应（Streaming）
 
