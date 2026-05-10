@@ -11,6 +11,9 @@ pub mod service;
 #[cfg(feature = "python")]
 pub mod python;
 
+#[cfg(feature = "cdll")]
+pub mod cdll;
+
 // Include generated bindings
 pub mod cronet_c {
     include!(concat!(env!("OUT_DIR"), "/cronet_bindings.rs"));
