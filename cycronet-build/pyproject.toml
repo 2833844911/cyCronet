@@ -37,7 +37,6 @@ include = [
     { path = "python/cycronet/__init__.pyi", format = "wheel" },
     { path = "python/cycronet/*.dll", format = "wheel" },
     { path = "python/cycronet/*.so", format = "wheel" },
-    { path = "python/cycronet/libcronet.*.so", format = "wheel" },
     { path = "python/cycronet/*.so.pkg", format = "wheel" },
     { path = "python/cycronet/*.dylib", format = "wheel" },
     { path = "python/cycronet/tls_profiles.json", format = "wheel" },

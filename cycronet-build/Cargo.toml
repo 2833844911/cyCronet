@@ -22,7 +22,7 @@ tracing-subscriber = "0.3"
 hex = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4"] }
 clap = { version = "4.5", features = ["derive", "env"], optional = true }
-pyo3 = { version = "0.22", features = ["extension-module", "abi3-py38"], optional = true }
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py38", "generate-import-lib"], optional = true }
 pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"], optional = true }
 
 # Pinning 'home' to avoid 0.5.11+ which requires edition2024
