@@ -92,8 +92,25 @@ def _load_linux_libraries():
     # Use RTLD_LOCAL to avoid symbol conflicts with other libraries (e.g. curl_cffi's BoringSSL).
     # The Rust extension module has DT_NEEDED + RPATH=$ORIGIN, so it resolves libcronet symbols
     # through ELF dependency, not the global symbol table.
+    #
+    # The .so is shipped as .so.pkg to prevent maturin from ignoring it during wheel build.
+    # Rename .so.pkg -> .so on first load if needed.
+    pkg_pattern = os.path.join(package_dir, "libcronet.*.so.pkg")
+    pkg_files = glob.glob(pkg_pattern)
+    for pkg_file in pkg_files:
+        so_file = pkg_file[:-4]  # strip ".pkg"
+        if not os.path.exists(so_file):
+            try:
+                os.rename(pkg_file, so_file)
+            except Exception:
+                try:
+                    import shutil
+                    shutil.copy2(pkg_file, so_file)
+                except Exception:
+                    pass
+
     so_pattern = os.path.join(package_dir, "libcronet.*.so")
-    so_files = glob.glob(so_pattern)
+    so_files = [f for f in glob.glob(so_pattern) if not f.endswith('.pkg')]
     if so_files:
         try:
             ctypes.CDLL(so_files[0], mode=ctypes.RTLD_LOCAL)

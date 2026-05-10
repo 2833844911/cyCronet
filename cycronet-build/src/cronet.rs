@@ -1587,10 +1587,11 @@ impl CronetWebSocket {
         })
     }
 
-    pub fn connect(&self, url: &str, sub_protocols: Option<&str>, origin: Option<&str>) -> Result<(), String> {
+    pub fn connect(&self, url: &str, sub_protocols: Option<&str>, origin: Option<&str>, extra_headers: Option<&str>) -> Result<(), String> {
         let c_url = safe_cstring(url, "ws_url")?;
         let c_protos = sub_protocols.map(|s| safe_cstring(s, "ws_sub_protocols")).transpose()?;
         let c_origin = origin.map(|s| safe_cstring(s, "ws_origin")).transpose()?;
+        let c_headers = extra_headers.map(|s| safe_cstring(s, "ws_extra_headers")).transpose()?;
 
         let ret = unsafe {
             Cronet_WebSocket_Connect(
@@ -1598,6 +1599,7 @@ impl CronetWebSocket {
                 c_url.as_ptr(),
                 c_protos.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
                 c_origin.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                c_headers.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
             )
         };
         if ret != 0 {

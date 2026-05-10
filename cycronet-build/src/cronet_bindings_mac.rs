@@ -1838,6 +1838,8 @@ pub type Cronet_WebSocketPtr = *mut ::std::os::raw::c_void;
 pub const Cronet_WebSocket_MESSAGE_TEXT: u32 = 1;
 pub const Cronet_WebSocket_MESSAGE_BINARY: u32 = 2;
 pub type Cronet_WebSocket_MessageType = u32;
+pub const Cronet_WebSocket_MessageType_Cronet_WebSocket_MESSAGE_TEXT: Cronet_WebSocket_MessageType = 1;
+pub const Cronet_WebSocket_MessageType_Cronet_WebSocket_MESSAGE_BINARY: Cronet_WebSocket_MessageType = 2;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1890,6 +1892,7 @@ extern "C" {
         url: *const ::std::os::raw::c_char,
         sub_protocols: *const ::std::os::raw::c_char,
         origin: *const ::std::os::raw::c_char,
+        extra_headers: *const ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {

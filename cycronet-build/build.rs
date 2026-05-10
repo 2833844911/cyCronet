@@ -173,6 +173,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", src_dll.display());
     } else if target_os == "linux" {
         let so_name = format!("libcronet.{}.so", version);
+        let pkg_name = format!("libcronet.{}.so.pkg", version);
         let src_so = lib_dir.join("libcronet.so");
         let dst_so = target_dir.join(&so_name);
 
@@ -180,8 +181,9 @@ fn main() {
             std::fs::copy(&src_so, &dst_so).ok();
             println!("cargo:warning=Copied {} to {}", src_so.display(), dst_so.display());
             if python_dir.exists() {
-                std::fs::copy(&src_so, python_dir.join(&so_name)).ok();
-                println!("cargo:warning=Copied SO to python package directory");
+                // Use .so.pkg extension to prevent maturin from ignoring native .so
+                std::fs::copy(&src_so, python_dir.join(&pkg_name)).ok();
+                println!("cargo:warning=Copied SO to python package directory as {}", pkg_name);
             }
         }
         println!("cargo:rerun-if-changed={}", src_so.display());

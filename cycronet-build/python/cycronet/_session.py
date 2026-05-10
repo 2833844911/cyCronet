@@ -754,7 +754,7 @@ class Session:
             'headers': response.headers
         }
 
-    def websocket(self, url, *, on_open=None, on_message=None, on_close=None, on_error=None):
+    def websocket(self, url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None):
         """Create a callback-based WebSocket connection.
 
         Args:
@@ -763,6 +763,7 @@ class Session:
             on_message: callback(ws, message, is_text) - called on message
             on_close: callback(ws, code, reason, was_clean) - called on close
             on_error: callback(ws, error, net_error) - called on error
+            headers: list of (name, value) tuples for custom HTTP headers
 
         Returns:
             WebSocketApp instance. Call .run_forever() or .run_in_background() to start.
@@ -774,6 +775,7 @@ class Session:
             on_message=on_message,
             on_close=on_close,
             on_error=on_error,
+            headers=headers,
         )
 
     def close(self):
