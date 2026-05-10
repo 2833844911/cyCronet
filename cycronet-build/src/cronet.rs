@@ -354,6 +354,10 @@ impl CronetEngine {
 
 impl Drop for CronetEngine {
     fn drop(&mut self) {
+        // NOTE: CronetEngine 由 Arc<CronetEngine> 持有（AppState），仅在进程退出时销毁。
+        // 此时 OS 会回收所有资源，因此即使有活跃请求也不会导致实际问题。
+        // 如果未来 CronetEngine 可能在运行时被销毁，需要添加类似 Session::drop 的
+        // active_requests 等待 + 超时泄漏逻辑。
         unsafe {
             // Clean up cached engines
             let cache = self.engine_cache.lock().unwrap();
@@ -985,15 +989,18 @@ impl Drop for Session {
                     let start = std::time::Instant::now();
                     while self.active_requests.load(Ordering::Acquire) > 0 {
                         if start.elapsed() > std::time::Duration::from_secs(30) {
-                            eprintln!("[WARN] Session::drop - Timeout waiting for {} active requests",
+                            eprintln!("[WARN] Session::drop - Timeout waiting for {} active requests, leaking engine to avoid use-after-free",
                                 self.active_requests.load(Ordering::Acquire));
-                            break;
+                            // 网络线程仍持有引用，不能销毁 Engine，否则会 crash。
+                            // 泄漏 Engine，但避免崩溃（与 CronetRequest::drop 策略一致）。
+                            self.engine_ptr = std::ptr::null_mut();
+                            return;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
                 }
 
-                // 同步执行模式下不需要等待 executor 线程
+                // 所有请求已完成，可以安全销毁
                 verbose_log!("[DEBUG] Session::drop - Calling Cronet_Engine_Shutdown");
                 Cronet_Engine_Shutdown(self.engine_ptr);
 
