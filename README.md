@@ -15,7 +15,7 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 📡 **流式响应（Streaming）支持（NEW！）**
 - 🔌 **WebSocket / WSS 支持，TLS 指纹与浏览器一致（NEW！）**
 ### 项目打赏，大家用好了可以打赏打赏作者哦。
-![](./0c63233762334b80240a6ee11f572005.jpg)
+![](./0c63233762334b80240a6ee11f572005-2.jpg)
 
 
 ### 为什么需要 Cycronet？
