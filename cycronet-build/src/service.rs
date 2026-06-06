@@ -1,14 +1,14 @@
 use crate::cronet::{CronetEngine, SessionConfig, SessionManager};
-use crate::cronet_pb::{ExecuteRequest, ExecuteResponse};
 use crate::cronet_pb::proxy_config::ProxyType;
+use crate::cronet_pb::{ExecuteRequest, ExecuteResponse};
 use axum::{
     extract::{Json, Path, State},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::io::Write;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 // Service State
 #[derive(Clone)]
@@ -53,7 +53,7 @@ fn log_request_debug(
     } else {
         log_entry.push_str("Body: <empty>\n");
     }
-    log_entry.push_str("\n");
+    log_entry.push('\n');
 
     // Append to req.txt
     if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -97,7 +97,13 @@ pub async fn execute_request(
     };
 
     // Log request if debug mode is enabled
-    log_request_debug(None, &target.url, &target.method, &target.headers, &target.body);
+    log_request_debug(
+        None,
+        &target.url,
+        &target.method,
+        &target.headers,
+        &target.body,
+    );
 
     // Start Timer
     let start_time = std::time::Instant::now();
@@ -189,10 +195,16 @@ pub struct CreateSessionRequest {
     pub skip_cert_verify: bool,
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
+    #[serde(default = "default_allow_redirects")]
+    pub allow_redirects: bool,
 }
 
 fn default_timeout() -> u64 {
     30000
+}
+
+fn default_allow_redirects() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,7 +212,7 @@ pub struct ProxyConfig {
     pub host: String,
     pub port: u32,
     #[serde(default)]
-    pub r#type: i32,  // 0=HTTP, 1=HTTPS, 2=SOCKS5
+    pub r#type: i32, // 0=HTTP, 1=HTTPS, 2=SOCKS5
     #[serde(default)]
     pub username: String,
     #[serde(default)]
@@ -244,6 +256,8 @@ pub struct SessionRequest {
     #[serde(default)]
     #[serde(with = "hex::serde")]
     pub body: Vec<u8>,
+    #[serde(default = "default_allow_redirects")]
+    pub allow_redirects: bool,
 }
 
 fn default_method() -> String {
@@ -282,6 +296,10 @@ pub async fn create_session(
         proxy_rules,
         skip_cert_verify: request.skip_cert_verify,
         timeout_ms: request.timeout_ms,
+        cipher_suites: None,
+        tls_curves: None,
+        tls_extensions: None,
+        allow_redirects: request.allow_redirects,
     };
 
     let session_id = state.session_manager.create_session(config);
@@ -333,16 +351,41 @@ pub async fn session_request(
     };
 
     // Log request if debug mode is enabled
-    log_request_debug(Some(&session_id), &target.url, &target.method, &target.headers, &target.body);
+    log_request_debug(
+        Some(&session_id),
+        &target.url,
+        &target.method,
+        &target.headers,
+        &target.body,
+    );
 
     let start_time = std::time::Instant::now();
 
     // 使用会话发送请求
-    let result = state.session_manager.send_request(&session_id, &target);
+    let result = state
+        .session_manager
+        .send_request(&session_id, &target, request.allow_redirects);
 
     match result {
-        Some((request_handle, rx)) => {
-            let execution_result = rx.await;
+        Some((request_handle, rx, timeout_ms)) => {
+            let execution_result = match tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                rx,
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    drop(request_handle);
+                    return Json(ExecuteResponse {
+                        request_id: String::new(),
+                        success: false,
+                        error_message: format!("Request timeout after {}ms", timeout_ms),
+                        duration_ms: start_time.elapsed().as_millis() as i64,
+                        response: None,
+                    });
+                }
+            };
             let duration_ms = start_time.elapsed().as_millis() as i64;
 
             drop(request_handle);
@@ -354,7 +397,9 @@ pub async fn session_request(
                     for (name, value) in res.headers {
                         headers_map
                             .entry(name)
-                            .or_insert_with(|| crate::cronet_pb::HeaderValues { values: Vec::new() })
+                            .or_insert_with(|| crate::cronet_pb::HeaderValues {
+                                values: Vec::new(),
+                            })
                             .values
                             .push(value);
                     }
@@ -370,7 +415,7 @@ pub async fn session_request(
                             body: res.body,
                         }),
                     })
-                },
+                }
                 Ok(Err(err_msg)) => Json(ExecuteResponse {
                     request_id: String::new(),
                     success: false,

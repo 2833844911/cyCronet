@@ -128,7 +128,6 @@ def _load_windows_libraries():
 
     if dll_files:
         # Use versioned DLL (cronet.144.0.7506.0.dll)
-        # Note: PYD file directly depends on the versioned DLL name
         versioned_dll = dll_files[0]
 
         # Add package directory to PATH (must be before add_dll_directory)
@@ -138,13 +137,11 @@ def _load_windows_libraries():
         if hasattr(os, 'add_dll_directory'):
             os.add_dll_directory(package_dir)
 
-        # Preload versioned DLL (Python 3.8+ requires explicit loading)
+        # Preload DLL (Python 3.8+ requires explicit loading)
         try:
-            # Use LoadLibraryEx with LOAD_WITH_ALTERED_SEARCH_PATH
             kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
             LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008
 
-            # Load versioned DLL (PYD depends on this name)
             handle = kernel32.LoadLibraryExW(
                 versioned_dll,
                 None,
@@ -152,7 +149,6 @@ def _load_windows_libraries():
             )
 
             if not handle:
-                # If LoadLibraryExW fails, try ctypes.CDLL as fallback
                 ctypes.CDLL(versioned_dll)
         except Exception as e:
             warnings.warn(

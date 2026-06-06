@@ -1,21 +1,62 @@
+#![allow(clippy::useless_conversion)]
+
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3_async_runtimes::tokio::future_into_py;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use pyo3_async_runtimes::tokio::future_into_py;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::cronet::{SessionConfig, SessionManager, StreamChunk, CronetRequest, CronetWebSocket, WebSocketEvent};
+use crate::cronet::{
+    CronetRequest, CronetWebSocket, SessionConfig, SessionManager, StreamChunk, WebSocketEvent,
+};
 use crate::cronet_pb::{Header, TargetRequest};
+
+struct SafeRuntime {
+    inner: Option<tokio::runtime::Runtime>,
+}
+
+impl SafeRuntime {
+    fn new(runtime: tokio::runtime::Runtime) -> Self {
+        Self {
+            inner: Some(runtime),
+        }
+    }
+}
+
+impl Deref for SafeRuntime {
+    type Target = tokio::runtime::Runtime;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner
+            .as_ref()
+            .expect("SafeRuntime inner runtime is only absent during Drop")
+    }
+}
+
+impl Drop for SafeRuntime {
+    fn drop(&mut self) {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            if let Some(runtime) = self.inner.take() {
+                eprintln!(
+                    "[WARN] PyCronetClient runtime dropped inside Tokio context; leaking runtime to avoid Tokio shutdown panic"
+                );
+                std::mem::forget(runtime);
+            }
+        }
+    }
+}
 
 /// Python wrapper for SessionManager
 #[pyclass]
 pub struct PyCronetClient {
     manager: Arc<SessionManager>,
-    runtime: Arc<tokio::runtime::Runtime>,
+    runtime: Arc<SafeRuntime>,
 }
 
 #[pymethods]
+#[allow(clippy::too_many_arguments)]
 impl PyCronetClient {
     #[new]
     fn new() -> PyResult<Self> {
@@ -23,13 +64,16 @@ impl PyCronetClient {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                format!("Failed to create Tokio runtime: {}", e)
-            ))?;
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to create Tokio runtime: {}",
+                    e
+                ))
+            })?;
 
         Ok(PyCronetClient {
             manager: Arc::new(SessionManager::new()),
-            runtime: Arc::new(runtime),
+            runtime: Arc::new(SafeRuntime::new(runtime)),
         })
     }
 
@@ -62,7 +106,7 @@ impl PyCronetClient {
             cipher_suites,
             tls_curves,
             tls_extensions,
-            allow_redirects: true,  // 默认允许重定向
+            allow_redirects: true, // 默认允许重定向
         };
 
         let session_id = self.manager.create_session(config);
@@ -116,7 +160,7 @@ impl PyCronetClient {
                 .send_request(&session_id, &target, allow_redirects)
                 .ok_or_else(|| {
                     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        "Failed to send request (session not found or concurrent limit reached)"
+                        "Failed to send request (session not found or concurrent limit reached)",
                     )
                 })?;
 
@@ -146,15 +190,17 @@ impl PyCronetClient {
                         Ok::<PyObject, PyErr>(dict.into())
                     })
                 }
-                Ok(Ok(Err(e))) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Request failed: {}", e)
-                )),
+                Ok(Ok(Err(e))) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Request failed: {}",
+                    e
+                ))),
                 Ok(Err(_)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "Channel closed unexpectedly"
+                    "Channel closed unexpectedly",
                 )),
-                Err(_) => Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
-                    format!("Request timeout after {}ms", timeout_ms)
-                )),
+                Err(_) => Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                    "Request timeout after {}ms",
+                    timeout_ms
+                ))),
             }
         })
     }
@@ -197,7 +243,9 @@ impl PyCronetClient {
         };
 
         // Send request
-        let result = self.manager.send_request(&session_id, &target, allow_redirects);
+        let result = self
+            .manager
+            .send_request(&session_id, &target, allow_redirects);
 
         match result {
             Some((request, rx, timeout_ms)) => {
@@ -205,9 +253,8 @@ impl PyCronetClient {
 
                 // Release GIL and block on async operation
                 let response_result = py.allow_threads(|| {
-                    self.runtime.block_on(async {
-                        tokio::time::timeout(timeout_duration, rx).await
-                    })
+                    self.runtime
+                        .block_on(async { tokio::time::timeout(timeout_duration, rx).await })
                 });
 
                 // Drop request handle
@@ -230,18 +277,19 @@ impl PyCronetClient {
                         Ok(dict.into())
                     }
                     Ok(Ok(Err(e))) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        format!("Request failed: {}", e)
+                        format!("Request failed: {}", e),
                     )),
                     Ok(Err(_)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        "Channel closed unexpectedly"
+                        "Channel closed unexpectedly",
                     )),
-                    Err(_) => Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
-                        format!("Request timeout after {}ms", timeout_ms)
-                    )),
+                    Err(_) => Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                        "Request timeout after {}ms",
+                        timeout_ms
+                    ))),
                 }
             }
             None => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "Failed to send request (session not found or concurrent limit reached)"
+                "Failed to send request (session not found or concurrent limit reached)",
             )),
         }
     }
@@ -273,7 +321,9 @@ impl PyCronetClient {
             body: body_vec,
         };
 
-        let result = self.manager.send_request_stream(&session_id, &target, allow_redirects);
+        let result = self
+            .manager
+            .send_request_stream(&session_id, &target, allow_redirects);
 
         match result {
             Some((request, mut rx, timeout_ms)) => {
@@ -282,13 +332,15 @@ impl PyCronetClient {
 
                 // Wait for headers (first chunk), release GIL
                 let first_chunk = py.allow_threads(|| {
-                    runtime.block_on(async {
-                        tokio::time::timeout(timeout_duration, rx.recv()).await
-                    })
+                    runtime
+                        .block_on(async { tokio::time::timeout(timeout_duration, rx.recv()).await })
                 });
 
                 match first_chunk {
-                    Ok(Some(StreamChunk::Headers { status_code, headers })) => {
+                    Ok(Some(StreamChunk::Headers {
+                        status_code,
+                        headers,
+                    })) => {
                         let reader = PyStreamReader {
                             rx: Arc::new(TokioMutex::new(Some(rx))),
                             runtime: self.runtime.clone(),
@@ -300,38 +352,40 @@ impl PyCronetClient {
                     }
                     Ok(Some(StreamChunk::Error(e))) => {
                         drop(request);
-                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            format!("Request failed: {}", e)
-                        ))
+                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                            "Request failed: {}",
+                            e
+                        )))
                     }
                     Ok(Some(StreamChunk::Done)) => {
                         drop(request);
                         Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Stream completed without headers"
+                            "Stream completed without headers",
                         ))
                     }
                     Ok(Some(StreamChunk::Data(_))) => {
                         drop(request);
                         Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Unexpected data before headers"
+                            "Unexpected data before headers",
                         ))
                     }
                     Ok(None) => {
                         drop(request);
                         Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Stream closed unexpectedly"
+                            "Stream closed unexpectedly",
                         ))
                     }
                     Err(_) => {
                         drop(request);
-                        Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
-                            format!("Request timeout after {}ms", timeout_ms)
-                        ))
+                        Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                            "Request timeout after {}ms",
+                            timeout_ms
+                        )))
                     }
                 }
             }
             None => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "Failed to send stream request (session not found or concurrent limit reached)"
+                "Failed to send stream request (session not found or concurrent limit reached)",
             )),
         }
     }
@@ -379,47 +433,50 @@ impl PyCronetClient {
             let first_chunk = tokio::time::timeout(timeout_duration, rx.recv()).await;
 
             match first_chunk {
-                Ok(Some(StreamChunk::Headers { status_code, headers })) => {
-                    Python::with_gil(|py| {
-                        let reader = PyStreamReader {
-                            rx: Arc::new(TokioMutex::new(Some(rx))),
-                            runtime,
-                            _request: Arc::new(StdMutex::new(Some(request))),
-                            status_code,
-                            headers_list: headers,
-                        };
-                        Ok::<PyObject, PyErr>(Py::new(py, reader)?.into_py(py))
-                    })
-                }
+                Ok(Some(StreamChunk::Headers {
+                    status_code,
+                    headers,
+                })) => Python::with_gil(|py| {
+                    let reader = PyStreamReader {
+                        rx: Arc::new(TokioMutex::new(Some(rx))),
+                        runtime,
+                        _request: Arc::new(StdMutex::new(Some(request))),
+                        status_code,
+                        headers_list: headers,
+                    };
+                    Ok::<PyObject, PyErr>(Py::new(py, reader)?.into_py(py))
+                }),
                 Ok(Some(StreamChunk::Error(e))) => {
                     drop(request);
-                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        format!("Request failed: {}", e)
-                    ))
+                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                        "Request failed: {}",
+                        e
+                    )))
                 }
                 Ok(Some(StreamChunk::Done)) => {
                     drop(request);
                     Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        "Stream completed without headers"
+                        "Stream completed without headers",
                     ))
                 }
                 Ok(Some(StreamChunk::Data(_))) => {
                     drop(request);
                     Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        "Unexpected data before headers"
+                        "Unexpected data before headers",
                     ))
                 }
                 Ok(None) => {
                     drop(request);
                     Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        "Stream closed unexpectedly"
+                        "Stream closed unexpectedly",
                     ))
                 }
                 Err(_) => {
                     drop(request);
-                    Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
-                        format!("Request timeout after {}ms", timeout_ms)
-                    ))
+                    Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                        "Request timeout after {}ms",
+                        timeout_ms
+                    )))
                 }
             }
         })
@@ -444,14 +501,24 @@ impl PyCronetClient {
     /// Returns:
     ///     PyCronetWebSocket instance
     #[pyo3(signature = (session_id, url, extra_headers=None))]
-    fn websocket_connect(&self, session_id: String, url: String, extra_headers: Option<Vec<(String, String)>>) -> PyResult<PyCronetWebSocket> {
-        let engine_ptr = self.manager.get_engine_ptr(&session_id)
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                format!("Session not found: {}", session_id)
-            ))?;
+    fn websocket_connect(
+        &self,
+        session_id: String,
+        url: String,
+        extra_headers: Option<Vec<(String, String)>>,
+    ) -> PyResult<PyCronetWebSocket> {
+        let (engine_ptr, session_live) =
+            self.manager.get_engine_handle(&session_id).ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Session not found: {}",
+                    session_id
+                ))
+            })?;
 
-        let ws = CronetWebSocket::new(engine_ptr)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+        // Safety: engine_ptr comes from a live SessionManager session, and
+        // session_live keeps the session engine alive until the WebSocket drops.
+        let ws = unsafe { CronetWebSocket::new_with_lifetime(engine_ptr, session_live) }
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         // Build "\r\n"-delimited header string from list of (name, value) tuples
         let headers_str = extra_headers.map(|hdrs| {
@@ -462,7 +529,7 @@ impl PyCronetClient {
         });
 
         ws.connect(&url, None, None, headers_str.as_deref())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         Ok(PyCronetWebSocket {
             inner: Arc::new(StdMutex::new(Some(ws))),
@@ -474,7 +541,7 @@ impl PyCronetClient {
 #[pyclass]
 pub struct PyStreamReader {
     rx: Arc<TokioMutex<Option<tokio::sync::mpsc::UnboundedReceiver<StreamChunk>>>>,
-    runtime: Arc<tokio::runtime::Runtime>,
+    runtime: Arc<SafeRuntime>,
     _request: Arc<StdMutex<Option<CronetRequest>>>,
     #[pyo3(get)]
     status_code: i32,
@@ -511,17 +578,11 @@ impl PyStreamReader {
         });
 
         match chunk {
-            Some(StreamChunk::Data(data)) => {
-                Ok(Some(PyBytes::new_bound(py, &data).into()))
-            }
-            Some(StreamChunk::Done) | None => {
-                Ok(None)
-            }
-            Some(StreamChunk::Error(e)) => {
-                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Stream error: {}", e)
-                ))
-            }
+            Some(StreamChunk::Data(data)) => Ok(Some(PyBytes::new_bound(py, &data).into())),
+            Some(StreamChunk::Done) | None => Ok(None),
+            Some(StreamChunk::Error(e)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                format!("Stream error: {}", e),
+            )),
             Some(StreamChunk::Headers { .. }) => {
                 // Unexpected headers in data stream, skip and try next
                 self.next_chunk_sync(py)
@@ -544,22 +605,17 @@ impl PyStreamReader {
             drop(guard);
 
             match chunk {
-                Some(StreamChunk::Data(data)) => {
-                    Python::with_gil(|py| {
-                        Ok::<Option<PyObject>, PyErr>(Some(PyBytes::new_bound(py, &data).into()))
-                    })
-                }
-                Some(StreamChunk::Done) | None => {
-                    Ok(None::<PyObject>)
-                }
+                Some(StreamChunk::Data(data)) => Python::with_gil(|py| {
+                    Ok::<Option<PyObject>, PyErr>(Some(PyBytes::new_bound(py, &data).into()))
+                }),
+                Some(StreamChunk::Done) | None => Ok(None::<PyObject>),
                 Some(StreamChunk::Error(e)) => {
-                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        format!("Stream error: {}", e)
-                    ))
+                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                        "Stream error: {}",
+                        e
+                    )))
                 }
-                Some(StreamChunk::Headers { .. }) => {
-                    Ok(None::<PyObject>)
-                }
+                Some(StreamChunk::Headers { .. }) => Ok(None::<PyObject>),
             }
         })
     }
@@ -588,42 +644,70 @@ pub struct PyCronetWebSocket {
 impl PyCronetWebSocket {
     /// Send a text message
     fn send(&self, message: String) -> PyResult<()> {
-        let guard = self.inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
-        let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
-        ws.send_text(&message).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+        let guard = self.inner.lock().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+        })?;
+        let ws = guard.as_ref().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
+        })?;
+        ws.send_text(&message)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     /// Send binary data
     fn send_bytes(&self, data: Vec<u8>) -> PyResult<()> {
-        let guard = self.inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
-        let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
-        ws.send_binary(&data).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+        let guard = self.inner.lock().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+        })?;
+        let ws = guard.as_ref().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
+        })?;
+        ws.send_binary(&data)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     /// Initiate graceful close
     fn close(&self, code: u16, reason: String) -> PyResult<()> {
-        let guard = self.inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
-        let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
-        ws.close(code, &reason).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+        let guard = self.inner.lock().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+        })?;
+        let ws = guard.as_ref().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
+        })?;
+        ws.close(code, &reason)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     /// Blocking receive next event (releases GIL)
     fn recv(&self, py: Python) -> PyResult<PyObject> {
         let inner = self.inner.clone();
         py.allow_threads(|| {
-            let guard = inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
-            let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
-            ws.rx.recv().map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Channel closed"))
-        }).and_then(|evt| Python::with_gil(|py| ws_event_to_dict(py, evt)))
+            let guard = inner.lock().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+            })?;
+            let ws = guard.as_ref().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
+            })?;
+            ws.rx
+                .recv()
+                .map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Channel closed"))
+        })
+        .and_then(|evt| Python::with_gil(|py| ws_event_to_dict(py, evt)))
     }
 
     /// Receive with timeout in milliseconds (releases GIL). Returns None on timeout.
     fn recv_timeout(&self, py: Python, timeout_ms: u64) -> PyResult<Option<PyObject>> {
         let inner = self.inner.clone();
         let result = py.allow_threads(|| {
-            let guard = inner.lock().map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e)))?;
-            let ws = guard.as_ref().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed"))?;
-            Ok::<Option<WebSocketEvent>, PyErr>(ws.rx.recv_timeout(Duration::from_millis(timeout_ms)).ok())
+            let guard = inner.lock().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+            })?;
+            let ws = guard.as_ref().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
+            })?;
+            Ok::<Option<WebSocketEvent>, PyErr>(
+                ws.rx.recv_timeout(Duration::from_millis(timeout_ms)).ok(),
+            )
         })?;
         match result {
             Some(evt) => Python::with_gil(|py| ws_event_to_dict(py, evt).map(Some)),
@@ -648,7 +732,11 @@ fn ws_event_to_dict(py: Python, evt: WebSocketEvent) -> PyResult<PyObject> {
                 dict.set_item("data", PyBytes::new_bound(py, &data))?;
             }
         }
-        WebSocketEvent::Close { was_clean, code, reason } => {
+        WebSocketEvent::Close {
+            was_clean,
+            code,
+            reason,
+        } => {
             dict.set_item("type", "close")?;
             dict.set_item("was_clean", was_clean)?;
             dict.set_item("code", code)?;
@@ -671,4 +759,3 @@ fn cronet_cloak(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCronetWebSocket>()?;
     Ok(())
 }
-

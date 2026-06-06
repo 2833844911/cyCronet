@@ -1,12 +1,15 @@
-use axum::{routing::{delete, get, post}, Router};
+use axum::{
+    routing::{delete, get, post},
+    Router,
+};
+use clap::Parser;
 use cronet_cloak::cronet::{self, SessionManager};
 use cronet_cloak::service;
 use cronet_cloak::service::AppState;
 use cronet_cloak::{DEBUG_MODE, VERBOSE_MODE};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use clap::Parser;
 use std::process;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Cronet-Cloak: Undetectable HTTP requests with authentic Chrome fingerprints
@@ -84,8 +87,10 @@ fn run_with_auto_restart_wrapper(args: Args) {
 
         let mut cmd = process::Command::new(&exe_path);
         cmd.arg("--internal-run")
-            .arg("--port").arg(args.port.to_string())
-            .arg("--host").arg(&args.host);
+            .arg("--port")
+            .arg(args.port.to_string())
+            .arg("--host")
+            .arg(&args.host);
 
         if args.debug {
             cmd.arg("--debug");
@@ -119,7 +124,10 @@ fn run_with_auto_restart_wrapper(args: Args) {
         }
 
         if max_restarts > 0 && restart_count >= max_restarts {
-            eprintln!("[ERROR] Maximum restart attempts ({}) reached. Exiting.", max_restarts);
+            eprintln!(
+                "[ERROR] Maximum restart attempts ({}) reached. Exiting.",
+                max_restarts
+            );
             eprintln!("Tip: Use '--help' for more information");
             process::exit(1);
         }
@@ -165,12 +173,18 @@ async fn run_server(args: Args) {
     }
 
     // Initialize Cronet Engine
-    let engine = Arc::new(cronet::CronetEngine::new("CronetCloak/1.0"));
+    let engine = Arc::new(
+        cronet::CronetEngine::new("CronetCloak/1.0")
+            .unwrap_or_else(|e| panic!("Failed to initialize Cronet Engine: {}", e)),
+    );
 
     // Initialize Session Manager
     let session_manager = Arc::new(SessionManager::new());
 
-    let state = AppState { engine, session_manager };
+    let state = AppState {
+        engine,
+        session_manager,
+    };
 
     // Build Router
     let app = Router::new()
@@ -188,8 +202,14 @@ async fn run_server(args: Args) {
         // Session Management API
         .route("/api/v1/session", post(service::create_session))
         .route("/api/v1/session", get(service::list_sessions))
-        .route("/api/v1/session/:session_id", delete(service::close_session))
-        .route("/api/v1/session/:session_id/request", post(service::session_request))
+        .route(
+            "/api/v1/session/:session_id",
+            delete(service::close_session),
+        )
+        .route(
+            "/api/v1/session/:session_id/request",
+            post(service::session_request),
+        )
         .with_state(state);
 
     let bind_addr = format!("{}:{}", args.host, args.port);
@@ -211,9 +231,19 @@ async fn run_server(args: Args) {
     println!("========================================");
     println!("Listening on: http://{}", listener.local_addr().unwrap());
     if args.verbose {
-        println!("Debug mode: {}", if args.debug { "enabled" } else { "disabled" });
+        println!(
+            "Debug mode: {}",
+            if args.debug { "enabled" } else { "disabled" }
+        );
         println!("Verbose logging: enabled");
-        println!("Auto-restart: {}", if args.auto_restart { "enabled" } else { "disabled" });
+        println!(
+            "Auto-restart: {}",
+            if args.auto_restart {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
     }
     println!("========================================");
     println!("Press Ctrl+C to stop the server");

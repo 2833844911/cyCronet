@@ -10,7 +10,10 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let (include_dir, lib_dir) = if target_os == "linux" && target_arch == "aarch64" {
-        (root.join("linux_arm64").join("include"), root.join("linux_arm64"))
+        (
+            root.join("linux_arm64").join("include"),
+            root.join("linux_arm64"),
+        )
     } else if target_os == "linux" {
         (root.join("linux").join("include"), root.join("linux"))
     } else if target_os == "macos" {
@@ -58,7 +61,10 @@ fn main() {
                 .expect("Failed to copy pre-generated bindings");
             println!("cargo:warning=Using pre-generated Linux bindings");
         } else {
-            panic!("Pre-generated Linux bindings not found at {:?}", pregenerated);
+            panic!(
+                "Pre-generated Linux bindings not found at {:?}",
+                pregenerated
+            );
         }
     } else if target.contains("darwin") || target.contains("aarch64-apple") {
         let pregenerated = PathBuf::from(&dir).join("src/cronet_bindings_mac.rs");
@@ -67,7 +73,10 @@ fn main() {
                 .expect("Failed to copy pre-generated bindings");
             println!("cargo:warning=Using pre-generated macOS bindings");
         } else {
-            panic!("Pre-generated macOS bindings not found at {:?}", pregenerated);
+            panic!(
+                "Pre-generated macOS bindings not found at {:?}",
+                pregenerated
+            );
         }
     } else {
         // For Windows, generate bindings normally
@@ -86,6 +95,13 @@ fn main() {
             .expect("Couldn't write bindings!");
     }
 
+    // 1.5. Compile SEH guard C helper (Windows only)
+    if target_os == "windows" {
+        cc::Build::new()
+            .file("src/seh_guard.c")
+            .compile("seh_guard");
+    }
+
     // 2. Compile Protos (Standard Prost)
     let proto_file = "proto/cronet_engine.proto";
 
@@ -97,7 +113,10 @@ fn main() {
                 .expect("Failed to copy pre-generated proto");
             println!("cargo:warning=Using pre-generated Linux proto");
         } else {
-            panic!("Pre-generated Linux proto not found at {:?}", pregenerated_proto);
+            panic!(
+                "Pre-generated Linux proto not found at {:?}",
+                pregenerated_proto
+            );
         }
     } else if target.contains("darwin") || target.contains("aarch64-apple") {
         let pregenerated_proto = PathBuf::from(&dir).join("src/cronet_proto_mac.rs");
@@ -106,7 +125,10 @@ fn main() {
                 .expect("Failed to copy pre-generated proto");
             println!("cargo:warning=Using pre-generated macOS proto");
         } else {
-            panic!("Pre-generated macOS proto not found at {:?}", pregenerated_proto);
+            panic!(
+                "Pre-generated macOS proto not found at {:?}",
+                pregenerated_proto
+            );
         }
     } else if std::path::Path::new(proto_file).exists() {
         // For Windows, compile protos normally
@@ -164,10 +186,17 @@ fn main() {
 
         if src_dll.exists() {
             std::fs::copy(&src_dll, &dst_dll).ok();
-            println!("cargo:warning=Copied {} to {}", src_dll.display(), dst_dll.display());
+            println!(
+                "cargo:warning=Copied {} to {}",
+                src_dll.display(),
+                dst_dll.display()
+            );
             if python_dir.exists() {
                 std::fs::copy(&src_dll, python_dir.join(&dll_name)).ok();
-                println!("cargo:warning=Copied {} to python package directory", dll_name);
+                println!(
+                    "cargo:warning=Copied {} to python package directory",
+                    dll_name
+                );
             }
         }
         println!("cargo:rerun-if-changed={}", src_dll.display());
@@ -179,11 +208,18 @@ fn main() {
 
         if src_so.exists() {
             std::fs::copy(&src_so, &dst_so).ok();
-            println!("cargo:warning=Copied {} to {}", src_so.display(), dst_so.display());
+            println!(
+                "cargo:warning=Copied {} to {}",
+                src_so.display(),
+                dst_so.display()
+            );
             if python_dir.exists() {
                 // Use .so.pkg extension to prevent maturin from ignoring native .so
                 std::fs::copy(&src_so, python_dir.join(&pkg_name)).ok();
-                println!("cargo:warning=Copied SO to python package directory as {}", pkg_name);
+                println!(
+                    "cargo:warning=Copied SO to python package directory as {}",
+                    pkg_name
+                );
             }
         }
         println!("cargo:rerun-if-changed={}", src_so.display());
@@ -194,7 +230,11 @@ fn main() {
 
         if src_dylib.exists() {
             std::fs::copy(&src_dylib, &dst_dylib).ok();
-            println!("cargo:warning=Copied {} to {}", src_dylib.display(), dst_dylib.display());
+            println!(
+                "cargo:warning=Copied {} to {}",
+                src_dylib.display(),
+                dst_dylib.display()
+            );
             if python_dir.exists() {
                 std::fs::copy(&src_dylib, python_dir.join(&dylib_name)).ok();
                 println!("cargo:warning=Copied dylib to python package directory");
