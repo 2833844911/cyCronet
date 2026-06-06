@@ -13,6 +13,10 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 🔐 **自定义 TLS 指纹配置（NEW！）**
 - 🔌 **SOCKS5 代理支持账号密码认证（NEW！）**
 - 📡 **流式响应（Streaming）支持（NEW！）**
+- 🔌 **WebSocket / WSS 支持，TLS 指纹与浏览器一致（NEW！）**
+### 项目打赏，大家用好了可以打赏打赏作者哦。
+![](./0c63233762334b80240a6ee11f572005-2.jpg)
+
 
 ### 为什么需要 Cycronet？
 
@@ -40,9 +44,6 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 **Cycronet 的解决方案：**
 
 Cycronet 直接使用 Chromium 的 Cronet 网络库，产生的所有网络特征与真实 Chrome 浏览器**完全一致**，无法被检测出是爬虫。
-
-## 安装
-```pip install cycronet```
 
 ## 🔐 TLS/HTTP2 指纹绕过
 
@@ -481,17 +482,11 @@ session.close()
 
 ### SOCKS5 代理（支持账号密码认证）
 
-Cycronet 原生支持 SOCKS5 代理，包括带用户名/密码认证的 SOCKS5 代理，无需额外依赖。
-
 ```python
 import cycronet
 
 # SOCKS5 代理（无认证）
-response = cycronet.get(
-    'https://httpbin.org/ip',
-    proxies='socks5://127.0.0.1:1080',
-    verify=False
-)
+response = cycronet.get('https://httpbin.org/ip', proxies='socks5://127.0.0.1:1080', verify=False)
 
 # SOCKS5 代理（带账号密码）
 response = cycronet.get(
@@ -499,16 +494,8 @@ response = cycronet.get(
     proxies='socks5://username:password@127.0.0.1:1080',
     verify=False
 )
-print(response.json())  # {"origin": "代理IP"}
 
-# socks5h 模式（DNS 由代理端解析，等同于 socks5）
-response = cycronet.get(
-    'https://httpbin.org/ip',
-    proxies='socks5h://username:password@127.0.0.1:1080',
-    verify=False
-)
-
-# 字典格式
+# socks5h 模式 / 字典格式均支持
 proxies = {
     'http': 'socks5://username:password@127.0.0.1:1080',
     'https': 'socks5://username:password@127.0.0.1:1080'
@@ -516,145 +503,172 @@ proxies = {
 response = cycronet.get('https://httpbin.org/ip', proxies=proxies, verify=False)
 ```
 
-**Session 中使用 SOCKS5 代理：**
+详细用法请参考 [README.md](../README.md)
+
+## � WebSocket 支持
+
+Cycronet 支持 WebSocket (`ws://`) 和安全 WebSocket (`wss://`) 连接，使用 Chromium 原生 WebSocket 实现，**TLS 指纹与 Chrome 浏览器完全一致**。
+
+### 基本用法
 
 ```python
 import cycronet
+import time
 
-# 同步 Session
-with cycronet.CronetClient(
-    verify=False,
-    proxies='socks5://username:password@127.0.0.1:1080'
-) as session:
-    r1 = session.get('https://httpbin.org/ip')
-    r2 = session.get('https://httpbin.org/get')  # 复用连接，H2 多路复用
-    print(r1.json(), r2.json())
+client = cycronet.PyCronetClient()
+session_id = client.create_session(skip_cert_verify=True)
 
-# 异步 Session
-import asyncio
+# 连接 WebSocket 服务器
+ws = client.websocket_connect(session_id, "wss://ws.postman-echo.com/raw")
 
-async def main():
-    async with cycronet.AsyncCronetClient(
-        verify=False,
-        proxies='socks5://username:password@127.0.0.1:1080'
-    ) as session:
-        response = await session.get('https://httpbin.org/ip')
-        print(response.json())
+# 等待连接打开
+evt = ws.recv_timeout(10000)  # 超时 10 秒，单位毫秒
+if evt and evt["type"] == "open":
+    print(f"已连接! 协议: {evt.get('protocol', '')}")
 
-asyncio.run(main())
+# 发送文本消息
+ws.send("Hello WebSocket!")
+
+# 接收消息
+evt = ws.recv_timeout(5000)
+if evt and evt["type"] == "message":
+    print(f"收到: {evt['data']}")       # 消息内容
+    print(f"文本: {evt['is_text']}")     # True=文本, False=二进制
+
+# 发送二进制消息
+ws.send_bytes(b"\x00\x01\x02\x03")
+
+# 优雅关闭
+ws.close(1000, "bye")
+evt = ws.recv_timeout(5000)
+if evt and evt["type"] == "close":
+    print(f"关闭: code={evt['code']}, clean={evt['was_clean']}")
+
+# 清理：先销毁 ws，再关闭 session
+del ws
+time.sleep(0.5)
+client.close_session(session_id)
 ```
 
-**支持的代理协议：**
+### 事件类型
 
-| 协议 | 格式 | 认证 |
+`recv()` 和 `recv_timeout()` 返回一个字典，`type` 字段标识事件类型：
+
+| type | 字段 | 说明 |
 |------|------|------|
-| HTTP | `http://host:port` | ✅ 支持 |
-| HTTPS | `https://host:port` | ✅ 支持 |
-| SOCKS5 | `socks5://host:port` | ✅ 支持 |
-| SOCKS5h | `socks5h://host:port` | ✅ 支持 |
+| `open` | `protocol` | 连接成功，返回协商的子协议 |
+| `message` | `data`, `is_text` | 收到消息；`is_text=True` 时 `data` 为字符串，否则为 `bytes` |
+| `close` | `was_clean`, `code`, `reason` | 连接关闭 |
+| `error` | `net_error`, `message` | 连接错误 |
 
-> **注意**：Cronet 的 SOCKS5 实现默认使用远程 DNS 解析（等同于 `socks5h`），因此 `socks5://` 和 `socks5h://` 行为一致。
+### API 参考
 
-## 📡 流式响应（Streaming）
+| 方法 | 说明 |
+|------|------|
+| `client.websocket_connect(session_id, url)` | 创建 WebSocket 连接，返回 `PyCronetWebSocket` |
+| `ws.send(text)` | 发送文本消息 |
+| `ws.send_bytes(data)` | 发送二进制消息 |
+| `ws.recv()` | 阻塞接收下一个事件（释放 GIL） |
+| `ws.recv_timeout(ms)` | 带超时接收，超时返回 `None` |
+| `ws.close(code, reason)` | 发起关闭握手 |
 
-Cycronet 支持流式读取响应数据，适用于大文件下载、SSE（Server-Sent Events）、分块数据处理等场景。
-
-### 基本流式读取
+### 快速收发多条消息
 
 ```python
-import cycronet
+# 批量发送
+for i in range(10):
+    ws.send(f"message-{i}")
 
-# 使用 stream=True 开启流式模式
-response = cycronet.get('https://httpbin.org/stream/5', stream=True, verify=False)
-print(f"状态码: {response.status_code}")
-
-# 按行迭代
-for line in response.iter_lines():
-    print(line)
-
-# 使用完毕后关闭
-response.close()
+# 按序接收
+for i in range(10):
+    evt = ws.recv_timeout(5000)
+    assert evt["data"] == f"message-{i}"
 ```
 
-### 按块读取（下载大文件）
+### 回调模式（推荐）
+
+类似 `websocket-client` 的 `WebSocketApp`，注册回调函数，自动在后台接收并分发事件：
 
 ```python
 import cycronet
 
-response = cycronet.get('https://example.com/large-file.zip', stream=True, verify=False)
+def on_open(ws):
+    print("已连接!")
+    ws.send("Hello!")
 
-with open('output.zip', 'wb') as f:
-    for chunk in response.iter_content(chunk_size=8192):
-        f.write(chunk)
+def on_message(ws, message, is_text):
+    print(f"收到: {message}")
+    ws.close(1000, "done")
 
-response.close()
-```
+def on_close(ws, code, reason, was_clean):
+    print(f"已关闭: code={code}")
 
-### 使用 with 语句（自动关闭）
+def on_error(ws, error, net_error):
+    print(f"错误: {error}")
 
-```python
-import cycronet
-
-with cycronet.CronetClient(verify=False) as session:
-    response = session.get('https://httpbin.org/stream/3', stream=True)
-
-    with response:
-        for line in response.iter_lines():
-            print(line)
-```
-
-### StreamResponse 便捷属性
-
-StreamResponse 也支持直接访问完整响应内容（会自动消费整个流）：
-
-```python
-import cycronet
-
-response = cycronet.get('https://httpbin.org/get', stream=True, verify=False)
-
-# 直接获取完整内容
-print(response.text)       # 文本内容
-print(response.content)    # 原始字节
-print(response.json())     # JSON 解析
-```
-
-### 异步流式读取
-
-```python
-import asyncio
-import cycronet
-
-async def stream_data():
-    response = await cycronet.async_get(
-        'https://httpbin.org/stream/5',
-        stream=True, verify=False
-    )
-
-    # 异步按行迭代
-    async for line in response.aiter_lines():
-        print(line)
-
-    response.close()
-
-asyncio.run(stream_data())
-```
-
-### 流式 + SOCKS5 代理
-
-```python
-import cycronet
-
-response = cycronet.get(
-    'https://httpbin.org/stream/3',
-    proxies='socks5://username:password@127.0.0.1:1080',
-    stream=True,
-    verify=False
+session = cycronet.CronetClient(verify=False)
+ws = session.websocket(
+    "wss://ws.postman-echo.com/raw",
+    on_open=on_open,
+    on_message=on_message,
+    on_close=on_close,
+    on_error=on_error,
 )
 
+# 方式 1：阻塞当前线程
+ws.run_forever()
+
+# 方式 2：在后台线程运行
+ws.run_in_background()
+# ... 做其他事情 ...
+ws.wait()  # 等待结束
+session.close()
+```
+
+**回调函数签名：**
+
+| 回调 | 签名 | 说明 |
+|------|------|------|
+| `on_open` | `(ws)` | 连接建立 |
+| `on_message` | `(ws, message, is_text)` | 收到消息，`is_text=True` 时 message 为 str |
+| `on_close` | `(ws, code, reason, was_clean)` | 连接关闭 |
+| `on_error` | `(ws, error, net_error)` | 发生错误 |
+
+在回调中可直接调用 `ws.send()` / `ws.send_bytes()` / `ws.close()` 发送消息或关闭连接。
+
+### 注意事项
+
+- **TLS 指纹**：`wss://` 连接使用 Chromium 原生 BoringSSL，指纹与 Chrome 浏览器完全一致
+- **线程安全**：`recv()` / `recv_timeout()` 会释放 Python GIL，不会阻塞其他线程
+- **回调模式清理**：`session.close()` 前需确保 ws 已关闭（`ws.wait()` 等待完成）
+- **轮询模式清理**：必须先 `del ws`，等待片刻后再 `session.close()`
+
+## �� 流式响应（Streaming）
+
+```python
+import cycronet
+
+# 流式读取
+response = cycronet.get('https://httpbin.org/stream/5', stream=True, verify=False)
 for line in response.iter_lines():
     print(line)
-
 response.close()
+
+# 按块下载
+response = cycronet.get('https://example.com/file.zip', stream=True, verify=False)
+with open('file.zip', 'wb') as f:
+    for chunk in response.iter_content(chunk_size=8192):
+        f.write(chunk)
+response.close()
+
+# 异步流式
+import asyncio
+async def stream():
+    r = await cycronet.async_get('https://httpbin.org/stream/5', stream=True, verify=False)
+    async for line in r.aiter_lines():
+        print(line)
+    r.close()
+asyncio.run(stream())
 ```
 
 ## 🔧 高级配置
@@ -906,6 +920,8 @@ response = cycronet.get('https://example.com', headers=headers, verify=False)
 - ✅ **高并发爬虫（使用异步 API）**
 - ✅ **大规模数据采集（异步并发）**
 - ✅ **实时监控系统（异步轮询）**
+- ✅ **WebSocket 实时通信（聊天、推送、行情）**
+- ✅ **WSS 连接绕过 WebSocket 指纹检测**
 
 ## 📦 安装
 
