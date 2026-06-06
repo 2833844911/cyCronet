@@ -9,7 +9,12 @@ fn main() {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    let (include_dir, lib_dir) = if target_os == "linux" {
+    let (include_dir, lib_dir) = if target_os == "linux" && target_arch == "aarch64" {
+        (
+            root.join("linux_arm64").join("include"),
+            root.join("linux_arm64"),
+        )
+    } else if target_os == "linux" {
         (root.join("linux").join("include"), root.join("linux"))
     } else if target_os == "macos" {
         (root.join("mac").join("include"), root.join("mac"))
@@ -56,7 +61,10 @@ fn main() {
                 .expect("Failed to copy pre-generated bindings");
             println!("cargo:warning=Using pre-generated Linux bindings");
         } else {
-            panic!("Pre-generated Linux bindings not found at {:?}", pregenerated);
+            panic!(
+                "Pre-generated Linux bindings not found at {:?}",
+                pregenerated
+            );
         }
     } else if target.contains("darwin") || target.contains("aarch64-apple") {
         let pregenerated = PathBuf::from(&dir).join("src/cronet_bindings_mac.rs");
@@ -65,14 +73,17 @@ fn main() {
                 .expect("Failed to copy pre-generated bindings");
             println!("cargo:warning=Using pre-generated macOS bindings");
         } else {
-            panic!("Pre-generated macOS bindings not found at {:?}", pregenerated);
+            panic!(
+                "Pre-generated macOS bindings not found at {:?}",
+                pregenerated
+            );
         }
     } else {
         // For Windows, generate bindings normally
         let bindings = bindgen::Builder::default()
             .header_contents(
                 "wrapper.h",
-                "#include <stdbool.h>\n#include \"cronet.idl_c.h\"",
+                "#include <stdbool.h>\n#include \"cronet.idl_c.h\"\n#include \"cronet_websocket_c.h\"",
             )
             .clang_arg(format!("-I{}", include_dir.display()))
             .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
@@ -82,6 +93,13 @@ fn main() {
         bindings
             .write_to_file(out_path.join("cronet_bindings.rs"))
             .expect("Couldn't write bindings!");
+    }
+
+    // 1.5. Compile SEH guard C helper (Windows only)
+    if target_os == "windows" {
+        cc::Build::new()
+            .file("src/seh_guard.c")
+            .compile("seh_guard");
     }
 
     // 2. Compile Protos (Standard Prost)
@@ -95,7 +113,10 @@ fn main() {
                 .expect("Failed to copy pre-generated proto");
             println!("cargo:warning=Using pre-generated Linux proto");
         } else {
-            panic!("Pre-generated Linux proto not found at {:?}", pregenerated_proto);
+            panic!(
+                "Pre-generated Linux proto not found at {:?}",
+                pregenerated_proto
+            );
         }
     } else if target.contains("darwin") || target.contains("aarch64-apple") {
         let pregenerated_proto = PathBuf::from(&dir).join("src/cronet_proto_mac.rs");
@@ -104,7 +125,10 @@ fn main() {
                 .expect("Failed to copy pre-generated proto");
             println!("cargo:warning=Using pre-generated macOS proto");
         } else {
-            panic!("Pre-generated macOS proto not found at {:?}", pregenerated_proto);
+            panic!(
+                "Pre-generated macOS proto not found at {:?}",
+                pregenerated_proto
+            );
         }
     } else if std::path::Path::new(proto_file).exists() {
         // For Windows, compile protos normally
@@ -151,129 +175,71 @@ fn main() {
         .unwrap()
         .to_path_buf();
 
-    #[cfg(target_os = "windows")]
-    {
-        // Windows: Copy DLL with version to target directory
+    // 4. Copy library to python package directory for maturin to include
+    // Use target_os (runtime check) instead of #[cfg] to support cross-compilation
+    let python_dir = PathBuf::from(&dir).join("python").join("cycronet");
+
+    if target_os == "windows" {
         let dll_name = format!("cronet.{}.dll", version);
         let src_dll = lib_dir.join("cronet.dll");
         let dst_dll = target_dir.join(&dll_name);
 
         if src_dll.exists() {
-            let should_copy = if dst_dll.exists() {
-                let src_meta = std::fs::metadata(&src_dll).ok();
-                let dst_meta = std::fs::metadata(&dst_dll).ok();
-                match (src_meta, dst_meta) {
-                    (Some(s), Some(d)) => s.modified().ok() > d.modified().ok(),
-                    _ => true,
-                }
-            } else {
-                true
-            };
-
-            if should_copy {
-                std::fs::copy(&src_dll, &dst_dll).expect("Failed to copy DLL to target dir");
+            std::fs::copy(&src_dll, &dst_dll).ok();
+            println!(
+                "cargo:warning=Copied {} to {}",
+                src_dll.display(),
+                dst_dll.display()
+            );
+            if python_dir.exists() {
+                std::fs::copy(&src_dll, python_dir.join(&dll_name)).ok();
                 println!(
-                    "cargo:warning=Copied {} to {}",
-                    src_dll.display(),
-                    dst_dll.display()
+                    "cargo:warning=Copied {} to python package directory",
+                    dll_name
                 );
             }
         }
-
-        // Also copy to python package directory for maturin to include
-        let python_dir = PathBuf::from(&dir).join("python").join("cycronet");
-        if python_dir.exists() {
-            let python_dll = python_dir.join(&dll_name);
-            if src_dll.exists() {
-                std::fs::copy(&src_dll, &python_dll).ok();
-                println!("cargo:warning=Copied {} to python package directory", dll_name);
-            }
-        }
-
         println!("cargo:rerun-if-changed={}", src_dll.display());
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Linux: Copy SO with version to target directory
+    } else if target_os == "linux" {
         let so_name = format!("libcronet.{}.so", version);
+        let pkg_name = format!("libcronet.{}.so.pkg", version);
         let src_so = lib_dir.join("libcronet.so");
         let dst_so = target_dir.join(&so_name);
 
         if src_so.exists() {
-            let should_copy = if dst_so.exists() {
-                let src_meta = std::fs::metadata(&src_so).ok();
-                let dst_meta = std::fs::metadata(&dst_so).ok();
-                match (src_meta, dst_meta) {
-                    (Some(s), Some(d)) => s.modified().ok() > d.modified().ok(),
-                    _ => true,
-                }
-            } else {
-                true
-            };
-
-            if should_copy {
-                std::fs::copy(&src_so, &dst_so).expect("Failed to copy SO to target dir");
+            std::fs::copy(&src_so, &dst_so).ok();
+            println!(
+                "cargo:warning=Copied {} to {}",
+                src_so.display(),
+                dst_so.display()
+            );
+            if python_dir.exists() {
+                // Use .so.pkg extension to prevent maturin from ignoring native .so
+                std::fs::copy(&src_so, python_dir.join(&pkg_name)).ok();
                 println!(
-                    "cargo:warning=Copied {} to {}",
-                    src_so.display(),
-                    dst_so.display()
+                    "cargo:warning=Copied SO to python package directory as {}",
+                    pkg_name
                 );
             }
         }
-
-        // Also copy to python package directory for maturin to include
-        let python_dir = PathBuf::from(&dir).join("python").join("cycronet");
-        if python_dir.exists() {
-            let python_so = python_dir.join(&so_name);
-            if src_so.exists() {
-                std::fs::copy(&src_so, &python_so).ok();
-                println!("cargo:warning=Copied SO to python package directory");
-            }
-        }
-
         println!("cargo:rerun-if-changed={}", src_so.display());
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // macOS: Copy dylib with version to target directory
+    } else if target_os == "macos" {
         let dylib_name = format!("libcronet.{}.dylib", version);
         let src_dylib = lib_dir.join("libcronet.dylib");
         let dst_dylib = target_dir.join(&dylib_name);
 
         if src_dylib.exists() {
-            let should_copy = if dst_dylib.exists() {
-                let src_meta = std::fs::metadata(&src_dylib).ok();
-                let dst_meta = std::fs::metadata(&dst_dylib).ok();
-                match (src_meta, dst_meta) {
-                    (Some(s), Some(d)) => s.modified().ok() > d.modified().ok(),
-                    _ => true,
-                }
-            } else {
-                true
-            };
-
-            if should_copy {
-                std::fs::copy(&src_dylib, &dst_dylib).expect("Failed to copy dylib to target dir");
-                println!(
-                    "cargo:warning=Copied {} to {}",
-                    src_dylib.display(),
-                    dst_dylib.display()
-                );
-            }
-        }
-
-        // Also copy to python package directory for maturin to include
-        let python_dir = PathBuf::from(&dir).join("python").join("cycronet");
-        if python_dir.exists() {
-            let python_dylib = python_dir.join(&dylib_name);
-            if src_dylib.exists() {
-                std::fs::copy(&src_dylib, &python_dylib).ok();
+            std::fs::copy(&src_dylib, &dst_dylib).ok();
+            println!(
+                "cargo:warning=Copied {} to {}",
+                src_dylib.display(),
+                dst_dylib.display()
+            );
+            if python_dir.exists() {
+                std::fs::copy(&src_dylib, python_dir.join(&dylib_name)).ok();
                 println!("cargo:warning=Copied dylib to python package directory");
             }
         }
-
         println!("cargo:rerun-if-changed={}", src_dylib.display());
     }
 

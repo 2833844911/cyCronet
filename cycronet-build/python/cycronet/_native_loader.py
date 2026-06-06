@@ -92,8 +92,25 @@ def _load_linux_libraries():
     # Use RTLD_LOCAL to avoid symbol conflicts with other libraries (e.g. curl_cffi's BoringSSL).
     # The Rust extension module has DT_NEEDED + RPATH=$ORIGIN, so it resolves libcronet symbols
     # through ELF dependency, not the global symbol table.
+    #
+    # The .so is shipped as .so.pkg to prevent maturin from ignoring it during wheel build.
+    # Rename .so.pkg -> .so on first load if needed.
+    pkg_pattern = os.path.join(package_dir, "libcronet.*.so.pkg")
+    pkg_files = glob.glob(pkg_pattern)
+    for pkg_file in pkg_files:
+        so_file = pkg_file[:-4]  # strip ".pkg"
+        if not os.path.exists(so_file):
+            try:
+                os.rename(pkg_file, so_file)
+            except Exception:
+                try:
+                    import shutil
+                    shutil.copy2(pkg_file, so_file)
+                except Exception:
+                    pass
+
     so_pattern = os.path.join(package_dir, "libcronet.*.so")
-    so_files = glob.glob(so_pattern)
+    so_files = [f for f in glob.glob(so_pattern) if not f.endswith('.pkg')]
     if so_files:
         try:
             ctypes.CDLL(so_files[0], mode=ctypes.RTLD_LOCAL)
@@ -111,7 +128,6 @@ def _load_windows_libraries():
 
     if dll_files:
         # Use versioned DLL (cronet.144.0.7506.0.dll)
-        # Note: PYD file directly depends on the versioned DLL name
         versioned_dll = dll_files[0]
 
         # Add package directory to PATH (must be before add_dll_directory)
@@ -121,13 +137,11 @@ def _load_windows_libraries():
         if hasattr(os, 'add_dll_directory'):
             os.add_dll_directory(package_dir)
 
-        # Preload versioned DLL (Python 3.8+ requires explicit loading)
+        # Preload DLL (Python 3.8+ requires explicit loading)
         try:
-            # Use LoadLibraryEx with LOAD_WITH_ALTERED_SEARCH_PATH
             kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
             LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008
 
-            # Load versioned DLL (PYD depends on this name)
             handle = kernel32.LoadLibraryExW(
                 versioned_dll,
                 None,
@@ -135,7 +149,6 @@ def _load_windows_libraries():
             )
 
             if not handle:
-                # If LoadLibraryExW fails, try ctypes.CDLL as fallback
                 ctypes.CDLL(versioned_dll)
         except Exception as e:
             warnings.warn(

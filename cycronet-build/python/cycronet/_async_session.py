@@ -19,22 +19,14 @@ class AsyncSession:
     MAX_REDIRECTS = 30  # Same default as requests
 
     def __init__(self, client: 'AsyncCronetClient', session_id: str, verify: bool = True,
+                 headers: Optional[Dict[str, str]] = None,
                  default_domain: Optional[str] = None):
         self._client = client
         self._session_id = session_id
         self._closed = False
         self._verify = verify
         self._cookies = CookieJar(default_domain=default_domain)
-        self._default_headers = {}  # Store default headers for session
-
-    @property
-    def headers(self) -> Dict[str, str]:
-        """Get/set session default headers - similar to requests.Session().headers"""
-        return self._default_headers
-
-    @headers.setter
-    def headers(self, value: Dict[str, str]):
-        self._default_headers = dict(value) if value else {}
+        self._default_headers = dict(headers) if headers else {}  # Store default headers for session
 
     @property
     def cookies(self) -> CookieJar:
@@ -183,17 +175,13 @@ class AsyncSession:
             else:
                 normal_headers.append((k, v))
 
-        # Get matching cookies from CookieJar and dedup by name using the
-        # per-cookie write sequence — newest write wins (same rule as
-        # requests / browsers). This keeps a fresh ``client.cookies.update``
-        # authoritative over a stale Set-Cookie the server wrote earlier for
-        # a different domain bucket, regardless of dict insertion order.
-        matched = [
-            c for c in self._cookies.iter_cookies()
-            if not c.domain or c.domain == domain or domain_matches(c.domain, domain)
-        ]
-        matched.sort(key=lambda c: c.seq)
-        merged_cookies = {c.name: c.value for c in matched}
+        # Get matching cookies from CookieJar (last-write-wins via seq)
+        all_cookies = []
+        for cookie in self._cookies.iter_cookies():
+            if not cookie.domain or cookie.domain == domain or domain_matches(cookie.domain, domain):
+                all_cookies.append(cookie)
+        all_cookies.sort(key=lambda c: c.seq)
+        merged_cookies = {c.name: c.value for c in all_cookies}
 
         if cookies:
             merged_cookies.update(cookies)
@@ -309,90 +297,9 @@ class AsyncSession:
             need_content_type=need_content_type
         )
 
-        import asyncio
-        loop = asyncio.get_event_loop()
-
         # Streaming path
         if stream:
-            stream_reader = await loop.run_in_executor(
-                None,
-                lambda: self._client._client.request_stream_sync(
-                    self._session_id,
-                    url,
-                    method.upper(),
-                    prepared_headers,
-                    body,
-                    False
-                )
-            )
-
-            resp_headers = {}
-            for name, value in stream_reader.headers:
-                if name not in resp_headers:
-                    resp_headers[name] = []
-                resp_headers[name].append(value)
-
-            status_code = stream_reader.status_code
-
-            response_cookies = CookieJar()
-            for header_name, values in resp_headers.items():
-                if header_name.lower() == 'set-cookie':
-                    for cookie_name, cookie_value, cookie_domain, cookie_path in parse_set_cookie(values):
-                        store_domain = cookie_domain if cookie_domain else normalize_cookie_domain(domain)
-                        response_cookies.set(cookie_name, cookie_value, store_domain, cookie_path)
-
-            self._update_cookies_from_response(resp_headers, domain)
-
-            if allow_redirects and status_code in (301, 302, 303, 307, 308):
-                stream_reader.close()
-                location = None
-                for header_name, values in resp_headers.items():
-                    if header_name.lower() == 'location':
-                        location = values[0] if values else None
-                        break
-
-                if location:
-                    redirects_remaining = kwargs.get('_redirects_remaining')
-                    if redirects_remaining is None:
-                        redirects_remaining = self.MAX_REDIRECTS
-                    if redirects_remaining <= 0:
-                        raise RequestError(
-                            f"Exceeded maximum redirects ({self.MAX_REDIRECTS})"
-                        )
-                    if not location.startswith(('http://', 'https://')):
-                        from urllib.parse import urljoin
-                        location = urljoin(url, location)
-
-                    redirect_method = 'GET' if status_code == 303 else method
-                    return await self.request(
-                        redirect_method,
-                        location,
-                        params=None,
-                        headers=headers_to_prepare,
-                        cookies=cookies,
-                        data=None if status_code == 303 else data,
-                        json=None,
-                        timeout=timeout,
-                        verify=verify,
-                        allow_redirects=True,
-                        stream=True,
-                        _redirects_remaining=redirects_remaining - 1
-                    )
-
-            return StreamResponse(
-                stream_reader=stream_reader,
-                headers=resp_headers,
-                url=url,
-                cookies=response_cookies
-            )
-
-        # Use run_in_executor to execute sync request in thread pool
-        # Avoid pyo3-asyncio compatibility issues
-
-        # Always disable redirects at Rust layer, handle in Python
-        response_dict = await loop.run_in_executor(
-            None,
-            lambda: self._client._client.request(
+            reader = await self._client._client.request_stream(
                 self._session_id,
                 url,
                 method.upper(),
@@ -400,6 +307,65 @@ class AsyncSession:
                 body,
                 False  # Always False - handle redirects in Python
             )
+
+            status_code = reader.status_code
+            resp_headers_list = list(reader.headers)
+
+            resp_headers = {}
+            for name, value in resp_headers_list:
+                if name not in resp_headers:
+                    resp_headers[name] = []
+                resp_headers[name].append(value)
+
+            # Update session cookies from response
+            self._update_cookies_from_response(resp_headers, domain)
+
+            # Create response CookieJar
+            response_cookies = CookieJar()
+            for header_name, values in resp_headers.items():
+                if header_name.lower() == 'set-cookie':
+                    for cookie_name, cookie_value, cookie_domain, cookie_path in parse_set_cookie(values):
+                        store_domain = cookie_domain if cookie_domain else normalize_cookie_domain(domain)
+                        response_cookies.set(cookie_name, cookie_value, store_domain, cookie_path)
+
+            # Handle redirects for streaming
+            if allow_redirects and status_code in (301, 302, 303, 307, 308):
+                location = None
+                for header_name, values in resp_headers.items():
+                    if header_name.lower() == 'location':
+                        location = values[0] if values else None
+                        break
+                if location:
+                    reader.close()
+                    redirects_remaining = kwargs.get('_redirects_remaining')
+                    if redirects_remaining is None:
+                        redirects_remaining = self.MAX_REDIRECTS
+                    if redirects_remaining <= 0:
+                        raise RequestError(f"Exceeded maximum redirects ({self.MAX_REDIRECTS})")
+                    if not location.startswith(('http://', 'https://')):
+                        from urllib.parse import urljoin
+                        location = urljoin(url, location)
+                    redirect_method = 'GET' if status_code == 303 else method
+                    return await self.request(
+                        redirect_method, location,
+                        params=None, headers=headers_to_prepare, cookies=cookies,
+                        data=None if status_code == 303 else data, json=None,
+                        timeout=timeout, verify=verify, allow_redirects=True,
+                        stream=True, _redirects_remaining=redirects_remaining - 1
+                    )
+
+            return StreamResponse(
+                reader, url=url, cookies=response_cookies
+            )
+
+        # Non-streaming path - directly await Rust async function (true async, no thread pool)
+        response_dict = await self._client._client.request(
+            self._session_id,
+            url,
+            method.upper(),
+            prepared_headers,
+            body,
+            False  # Always False - handle redirects in Python
         )
 
         status_code = response_dict['status_code']

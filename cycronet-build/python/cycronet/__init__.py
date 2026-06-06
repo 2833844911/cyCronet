@@ -40,7 +40,7 @@ load_native_libraries()
 
 # Import Rust extension module
 try:
-    from .cronet_cloak import PyCronetClient, PyCronetWebSocket
+    from .cronet_cloak import PyCronetClient
 except ImportError as e:
     # If import fails, provide helpful error message
     if sys.platform == "linux" and "libcronet" in str(e):
@@ -69,11 +69,11 @@ from ._api_sync import (
     get, post, put, delete, patch, head, options,
     upload_file, download_file
 )
-from ._websocket import WebSocketApp
 from ._api_async import (
     async_get, async_post, async_put, async_delete, async_patch,
     async_head, async_options, async_upload_file, async_download_file
 )
+from ._websocket import WebSocketApp
 
 __all__ = [
     "CronetClient", "Session", "Response", "StreamResponse", "HTTPStatusError", "RequestError",
@@ -84,6 +84,5 @@ __all__ = [
     "async_get", "async_post", "async_put", "async_delete", "async_patch",
     "async_head", "async_options", "async_upload_file", "async_download_file",
     "set_tls_profiles", "add_tls_profile", "get_tls_profiles", "clear_tls_profiles_cache",
-    "PyCronetWebSocket",
     "WebSocketApp"
 ]

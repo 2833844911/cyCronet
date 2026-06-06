@@ -3,7 +3,7 @@ Response and exception classes for cycronet.
 """
 
 import json as json_lib
-from typing import Dict, List, Any, Optional, Iterator, Generator
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 
 from ._cookies import CookieJar
@@ -80,55 +80,42 @@ class RequestError(Exception):
 
 
 class StreamResponse:
-    """Streaming HTTP response object - compatible with requests streaming API.
+    """Streaming HTTP response - compatible with requests stream=True style.
 
-    Usage:
-        response = session.get("https://example.com", stream=True)
-        for chunk in response.iter_content(chunk_size=1024):
-            process(chunk)
+    Usage (sync):
+        response = session.get(url, stream=True)
+        for chunk in response.iter_content(8192):
+            f.write(chunk)
 
-        # Or with context manager:
-        with session.get("https://example.com", stream=True) as response:
-            for line in response.iter_lines():
-                print(line)
+    Usage (async):
+        response = await session.get(url, stream=True)
+        async for chunk in response.aiter_content(8192):
+            f.write(chunk)
     """
 
-    def __init__(self, stream_reader, headers: Dict[str, List[str]],
-                 url: str = "", cookies: Optional[CookieJar] = None):
-        self._reader = stream_reader
-        self.status_code: int = stream_reader.status_code
-        self._headers = headers
-        self.url = url
-        self._cookies = cookies or CookieJar()
-        self._closed = False
-        self._session = None  # Will be set by module-level API to keep session alive
-        self._content: Optional[bytes] = None  # Lazily consumed full body
+    def __init__(self, reader, url: str = "", cookies: Optional['CookieJar'] = None,
+                 encoding: Optional[str] = None, session=None):
+        self._reader = reader
+        self._status_code: int = reader.status_code
+        self._raw_headers: List = list(reader.headers)
+        self.url: str = url
+        self._cookies: CookieJar = cookies or CookieJar()
+        self.encoding: Optional[str] = encoding
+        self._content: Optional[bytes] = None
+        self._closed: bool = False
+        self._session = session
 
-    def _consume(self) -> bytes:
-        """Read the entire stream into memory (idempotent)."""
-        if self._content is None:
-            self._content = b"".join(self.iter_content())
-        return self._content
-
-    @property
-    def content(self) -> bytes:
-        """Read the entire response body as bytes (consumes the stream)."""
-        return self._consume()
+        # Parse raw headers into dict
+        self._headers: Dict[str, List[str]] = {}
+        for name, value in self._raw_headers:
+            lower_name = name.lower()
+            if lower_name not in self._headers:
+                self._headers[lower_name] = []
+            self._headers[lower_name].append(value)
 
     @property
-    def text(self) -> str:
-        """Read the entire response body as text (consumes the stream)."""
-        body = self._consume()
-        encoding = 'utf-8'
-        ct = self._headers.get('content-type', [''])[0] if self._headers.get('content-type') else ''
-        if 'charset=' in ct:
-            encoding = ct.split('charset=')[-1].split(';')[0].strip()
-        return body.decode(encoding, errors='replace')
-
-    def json(self) -> Any:
-        """Read the entire response body and parse as JSON (consumes the stream)."""
-        import json as _json
-        return _json.loads(self._consume())
+    def status_code(self) -> int:
+        return self._status_code
 
     @property
     def headers(self) -> Dict[str, str]:
@@ -136,124 +123,175 @@ class StreamResponse:
         return {k: v[0] if v else "" for k, v in self._headers.items()}
 
     @property
-    def cookies(self) -> CookieJar:
-        """Return response cookies (CookieJar object)"""
+    def cookies(self) -> 'CookieJar':
         return self._cookies
 
     @property
     def ok(self) -> bool:
-        """Check if status code indicates success"""
-        return 200 <= self.status_code < 400
+        return 200 <= self._status_code < 400
+
+    def _get_encoding(self) -> str:
+        if self.encoding:
+            return self.encoding
+        content_type = self.headers.get('content-type', '').lower()
+        if 'charset=' in content_type:
+            try:
+                charset = content_type.split('charset=')[1].split(';')[0].strip()
+                return charset
+            except Exception:
+                pass
+        return 'utf-8'
 
     def raise_for_status(self):
-        """Raise exception if status code indicates error"""
-        if self.status_code >= 400:
-            raise HTTPStatusError(f"{self.status_code} Error", response=self)
+        if self._status_code >= 400:
+            raise HTTPStatusError(f"{self._status_code} Error", response=self)
 
-    def iter_content(self, chunk_size: Optional[int] = None) -> Generator[bytes, None, None]:
-        """Iterate over response data in chunks.
+    # ---- Sync iteration ----
+
+    def iter_content(self, chunk_size: Optional[int] = None):
+        """Iterate over response data chunks (sync generator).
 
         Args:
-            chunk_size: Size of chunks to return. If None, return chunks as received.
+            chunk_size: If set, re-chunk data into pieces of this size.
+                        If None, yield raw chunks as received from network.
         """
         if self._closed:
             return
 
-        try:
-            if chunk_size is None or chunk_size <= 0:
-                # Return chunks as received from Cronet
-                while True:
-                    chunk = self._reader.next_chunk_sync()
-                    if chunk is None:
-                        break
-                    if chunk:
-                        yield chunk
+        buf = b""
+        while True:
+            chunk = self._reader.next_chunk_sync()
+            if chunk is None:
+                if buf:
+                    yield buf
+                break
+            if chunk_size is None:
+                yield chunk
             else:
-                # Buffer and yield fixed-size chunks
-                buffer = b""
-                while True:
-                    chunk = self._reader.next_chunk_sync()
-                    if chunk is None:
-                        if buffer:
-                            yield buffer
-                        break
-                    buffer += chunk
-                    while len(buffer) >= chunk_size:
-                        yield buffer[:chunk_size]
-                        buffer = buffer[chunk_size:]
-        finally:
-            self.close()
+                buf += chunk
+                while len(buf) >= chunk_size:
+                    yield buf[:chunk_size]
+                    buf = buf[chunk_size:]
 
-    def iter_lines(self, chunk_size: int = 512,
-                   decode_unicode: bool = False,
-                   delimiter: Optional[str] = None) -> Generator[str, None, None]:
-        """Iterate over response data line by line.
+    def iter_lines(self, chunk_size: int = 512, decode_unicode: bool = True, delimiter: Optional[str] = None):
+        """Iterate over response lines (sync generator).
 
         Args:
-            chunk_size: Size of chunks to read.
-            decode_unicode: Whether to decode bytes to string.
-            delimiter: Line delimiter (default: newline).
+            chunk_size: Internal read buffer size.
+            delimiter: Line delimiter. Default: None (auto-detect \\n or \\r\\n).
         """
         pending = b""
-        sep = delimiter.encode('utf-8') if delimiter else None
+        delim_bytes = delimiter.encode(self._get_encoding()) if delimiter else None
 
         for chunk in self.iter_content(chunk_size=chunk_size):
             pending += chunk
-            if sep:
-                lines = pending.split(sep)
+            if delim_bytes:
+                lines = pending.split(delim_bytes)
             else:
                 lines = pending.splitlines(True)
 
-            # Yield all complete lines
-            for line in lines[:-1]:
-                line_clean = line.rstrip(b'\r\n') if not sep else line
-                if line_clean:
-                    if decode_unicode:
-                        yield line_clean.decode('utf-8', errors='replace')
-                    else:
-                        yield line_clean
+            # All complete lines except the last (which may be incomplete)
+            if lines:
+                for line in lines[:-1]:
+                    decoded = line.decode(self._get_encoding(), errors='replace')
+                    yield decoded.rstrip('\r\n')
+                pending = lines[-1] if not lines[-1].endswith((b'\n', b'\r')) else b""
+                if lines[-1].endswith((b'\n', b'\r')):
+                    decoded = lines[-1].decode(self._get_encoding(), errors='replace')
+                    yield decoded.rstrip('\r\n')
 
-            # Keep incomplete last part
-            last = lines[-1]
-            if sep:
-                pending = last
-            else:
-                if last.endswith((b'\n', b'\r', b'\r\n')):
-                    line_clean = last.rstrip(b'\r\n')
-                    if line_clean:
-                        if decode_unicode:
-                            yield line_clean.decode('utf-8', errors='replace')
-                        else:
-                            yield line_clean
-                    pending = b""
-                else:
-                    pending = last
-
-        # Yield remaining data
         if pending:
-            pending_clean = pending.rstrip(b'\r\n')
-            if pending_clean:
-                if decode_unicode:
-                    yield pending_clean.decode('utf-8', errors='replace')
-                else:
-                    yield pending_clean
+            yield pending.decode(self._get_encoding(), errors='replace').rstrip('\r\n')
+
+    # ---- Async iteration ----
+
+    async def aiter_content(self, chunk_size: Optional[int] = None):
+        """Iterate over response data chunks (async generator)."""
+        if self._closed:
+            return
+
+        buf = b""
+        while True:
+            chunk = await self._reader.next_chunk()
+            if chunk is None:
+                if buf:
+                    yield buf
+                break
+            if chunk_size is None:
+                yield chunk
+            else:
+                buf += chunk
+                while len(buf) >= chunk_size:
+                    yield buf[:chunk_size]
+                    buf = buf[chunk_size:]
+
+    async def aiter_lines(self, chunk_size: int = 512, delimiter: Optional[str] = None):
+        """Iterate over response lines (async generator)."""
+        pending = b""
+        delim_bytes = delimiter.encode(self._get_encoding()) if delimiter else None
+
+        async for chunk in self.aiter_content(chunk_size=chunk_size):
+            pending += chunk
+            if delim_bytes:
+                lines = pending.split(delim_bytes)
+            else:
+                lines = pending.splitlines(True)
+
+            if lines:
+                for line in lines[:-1]:
+                    decoded = line.decode(self._get_encoding(), errors='replace')
+                    yield decoded.rstrip('\r\n')
+                pending = lines[-1] if not lines[-1].endswith((b'\n', b'\r')) else b""
+                if lines[-1].endswith((b'\n', b'\r')):
+                    decoded = lines[-1].decode(self._get_encoding(), errors='replace')
+                    yield decoded.rstrip('\r\n')
+
+        if pending:
+            yield pending.decode(self._get_encoding(), errors='replace').rstrip('\r\n')
+
+    # ---- Drain helpers ----
+
+    @property
+    def content(self) -> bytes:
+        """Read entire remaining body. Drains the stream."""
+        if self._content is None:
+            chunks = []
+            for chunk in self.iter_content():
+                chunks.append(chunk)
+            self._content = b"".join(chunks)
+        return self._content
+
+    @property
+    def text(self) -> str:
+        return self.content.decode(self._get_encoding(), errors='replace')
+
+    def json(self) -> Any:
+        return json_lib.loads(self.text)
+
+    # ---- Resource management ----
 
     def close(self):
-        """Close the stream and release resources."""
         if not self._closed:
             self._closed = True
             if self._reader is not None:
+                self._reader.close()
+            if self._session is not None:
                 try:
-                    self._reader.close()
+                    self._session.close()
                 except Exception:
                     pass
-            # Release session reference (allows session cleanup)
-            self._session = None
+                self._session = None
 
     def __enter__(self):
         return self
 
     def __exit__(self, *args):
+        self.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
         self.close()
 
     def __del__(self):

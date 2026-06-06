@@ -1,24 +1,79 @@
+#![allow(clippy::useless_conversion)]
+
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
-use std::sync::Arc;
+use pyo3_async_runtimes::tokio::future_into_py;
+use std::ops::Deref;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
+use tokio::sync::Mutex as TokioMutex;
 
-use crate::cronet::{SessionConfig, SessionManager, StreamChunk, CronetRequest, CronetWebSocket, WebSocketEvent};
+use crate::cronet::{
+    CronetRequest, CronetWebSocket, SessionConfig, SessionManager, StreamChunk, WebSocketEvent,
+};
 use crate::cronet_pb::{Header, TargetRequest};
-use std::sync::Mutex as StdMutex;
+
+struct SafeRuntime {
+    inner: Option<tokio::runtime::Runtime>,
+}
+
+impl SafeRuntime {
+    fn new(runtime: tokio::runtime::Runtime) -> Self {
+        Self {
+            inner: Some(runtime),
+        }
+    }
+}
+
+impl Deref for SafeRuntime {
+    type Target = tokio::runtime::Runtime;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner
+            .as_ref()
+            .expect("SafeRuntime inner runtime is only absent during Drop")
+    }
+}
+
+impl Drop for SafeRuntime {
+    fn drop(&mut self) {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            if let Some(runtime) = self.inner.take() {
+                eprintln!(
+                    "[WARN] PyCronetClient runtime dropped inside Tokio context; leaking runtime to avoid Tokio shutdown panic"
+                );
+                std::mem::forget(runtime);
+            }
+        }
+    }
+}
 
 /// Python wrapper for SessionManager
 #[pyclass]
 pub struct PyCronetClient {
     manager: Arc<SessionManager>,
+    runtime: Arc<SafeRuntime>,
 }
 
 #[pymethods]
+#[allow(clippy::too_many_arguments)]
 impl PyCronetClient {
     #[new]
     fn new() -> PyResult<Self> {
+        // Create a multi-threaded Tokio runtime for async operations
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to create Tokio runtime: {}",
+                    e
+                ))
+            })?;
+
         Ok(PyCronetClient {
             manager: Arc::new(SessionManager::new()),
+            runtime: Arc::new(SafeRuntime::new(runtime)),
         })
     }
 
@@ -51,14 +106,106 @@ impl PyCronetClient {
             cipher_suites,
             tls_curves,
             tls_extensions,
-            allow_redirects: true,  // 默认允许重定向
+            allow_redirects: true, // 默认允许重定向
         };
 
         let session_id = self.manager.create_session(config);
         Ok(session_id)
     }
 
-    /// Execute request using a session
+    /// Execute request using a session (true async with pyo3-asyncio)
+    ///
+    /// Args:
+    ///     session_id: Session ID
+    ///     url: Target URL
+    ///     method: HTTP method (GET, POST, etc.)
+    ///     headers: List of tuples [("name", "value"), ...]
+    ///     body: Request body as bytes
+    ///     allow_redirects: Whether to follow redirects (default: True)
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to Dict with keys: status_code, headers, body
+    #[pyo3(signature = (session_id, url, method, headers=None, body=None, allow_redirects=true))]
+    fn request<'py>(
+        &self,
+        py: Python<'py>,
+        session_id: String,
+        url: String,
+        method: String,
+        headers: Option<Vec<(String, String)>>,
+        body: Option<Vec<u8>>,
+        allow_redirects: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let headers_vec = headers.unwrap_or_default();
+        let body_vec = body.unwrap_or_default();
+
+        // Build target request
+        let target = TargetRequest {
+            url,
+            method,
+            headers: headers_vec
+                .into_iter()
+                .map(|(name, value)| Header { name, value })
+                .collect(),
+            body: body_vec,
+        };
+
+        // Clone Arc for async task
+        let manager = self.manager.clone();
+
+        // Convert Rust async to Python awaitable (TRUE ASYNC!)
+        future_into_py(py, async move {
+            // Send request
+            let (request, rx, timeout_ms) = manager
+                .send_request(&session_id, &target, allow_redirects)
+                .ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "Failed to send request (session not found or concurrent limit reached)",
+                    )
+                })?;
+
+            // Wait for response with timeout (TRUE ASYNC - no blocking!)
+            let timeout_duration = Duration::from_millis(timeout_ms);
+            let result = tokio::time::timeout(timeout_duration, rx).await;
+
+            // Drop request handle
+            drop(request);
+
+            // Convert result to Python dict
+            match result {
+                Ok(Ok(Ok(response))) => {
+                    Python::with_gil(|py| {
+                        let dict = PyDict::new_bound(py);
+                        dict.set_item("status_code", response.status_code)?;
+                        dict.set_item("body", PyBytes::new_bound(py, &response.body))?;
+
+                        // Convert headers
+                        let headers_list = PyList::empty_bound(py);
+                        for (name, value) in response.headers {
+                            let tuple = (name, value);
+                            headers_list.append(tuple)?;
+                        }
+                        dict.set_item("headers", headers_list)?;
+
+                        Ok::<PyObject, PyErr>(dict.into())
+                    })
+                }
+                Ok(Ok(Err(e))) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Request failed: {}",
+                    e
+                ))),
+                Ok(Err(_)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "Channel closed unexpectedly",
+                )),
+                Err(_) => Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                    "Request timeout after {}ms",
+                    timeout_ms
+                ))),
+            }
+        })
+    }
+
+    /// Execute request using a session (blocking/sync version)
     ///
     /// Args:
     ///     session_id: Session ID
@@ -71,7 +218,7 @@ impl PyCronetClient {
     /// Returns:
     ///     Dict with keys: status_code, headers, body
     #[pyo3(signature = (session_id, url, method, headers=None, body=None, allow_redirects=true))]
-    fn request(
+    fn request_sync(
         &self,
         py: Python,
         session_id: String,
@@ -96,37 +243,25 @@ impl PyCronetClient {
         };
 
         // Send request
-        let result = self.manager.send_request(&session_id, &target, allow_redirects);
+        let result = self
+            .manager
+            .send_request(&session_id, &target, allow_redirects);
 
         match result {
             Some((request, rx, timeout_ms)) => {
-                // Wait for response with timeout
                 let timeout_duration = Duration::from_millis(timeout_ms);
 
-                // Release GIL while waiting for response to allow concurrent requests
-                let response_result = py.allow_threads(move || {
-                    // Use a thread to implement timeout
-                    let (timeout_tx, timeout_rx) = std::sync::mpsc::channel();
-                    std::thread::spawn(move || {
-                        match rx.blocking_recv() {
-                            Ok(result) => {
-                                let _ = timeout_tx.send(Some(result));
-                            }
-                            Err(_) => {
-                                let _ = timeout_tx.send(None);
-                            }
-                        }
-                    });
-
-                    // Wait with timeout and keep request alive
-                    let result = timeout_rx.recv_timeout(timeout_duration);
-                    // Explicitly drop request here to ensure cleanup on timeout
-                    drop(request);
-                    result
+                // Release GIL and block on async operation
+                let response_result = py.allow_threads(|| {
+                    self.runtime
+                        .block_on(async { tokio::time::timeout(timeout_duration, rx).await })
                 });
 
+                // Drop request handle
+                drop(request);
+
                 match response_result {
-                    Ok(Some(Ok(response))) => {
+                    Ok(Ok(Ok(response))) => {
                         let dict = PyDict::new_bound(py);
                         dict.set_item("status_code", response.status_code)?;
                         dict.set_item("body", PyBytes::new_bound(py, &response.body))?;
@@ -139,38 +274,27 @@ impl PyCronetClient {
                         }
                         dict.set_item("headers", headers_list)?;
 
-                        Ok(dict.into_py(py))
+                        Ok(dict.into())
                     }
-                    Ok(Some(Err(e))) => {
-                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            format!("Request failed: {}", e)
-                        ))
-                    }
-                    Ok(None) => {
-                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Channel closed unexpectedly"
-                        ))
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        // Request was already dropped in the closure above
-                        Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
-                            format!("Request timeout after {}ms", timeout_ms)
-                        ))
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Timeout channel disconnected"
-                        ))
-                    }
+                    Ok(Ok(Err(e))) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        format!("Request failed: {}", e),
+                    )),
+                    Ok(Err(_)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "Channel closed unexpectedly",
+                    )),
+                    Err(_) => Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                        "Request timeout after {}ms",
+                        timeout_ms
+                    ))),
                 }
             }
             None => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "Failed to send request (session not found or concurrent limit reached)"
+                "Failed to send request (session not found or concurrent limit reached)",
             )),
         }
     }
 
-    /// Execute streaming request using a session (synchronous)
+    /// Execute streaming request using a session (blocking/sync version)
     ///
     /// Returns: PyStreamReader with status_code, headers, and next_chunk_sync() method
     #[pyo3(signature = (session_id, url, method, headers=None, body=None, allow_redirects=true))]
@@ -197,68 +321,165 @@ impl PyCronetClient {
             body: body_vec,
         };
 
-        let result = self.manager.send_request_stream(&session_id, &target, allow_redirects);
+        let result = self
+            .manager
+            .send_request_stream(&session_id, &target, allow_redirects);
 
         match result {
             Some((request, mut rx, timeout_ms)) => {
                 let timeout_duration = Duration::from_millis(timeout_ms);
+                let runtime = self.runtime.clone();
 
                 // Wait for headers (first chunk), release GIL
                 let first_chunk = py.allow_threads(|| {
-                    let (tx, timeout_rx) = std::sync::mpsc::channel();
-                    std::thread::spawn(move || {
-                        let chunk = rx.blocking_recv();
-                        let _ = tx.send((chunk, rx));
-                    });
-                    timeout_rx.recv_timeout(timeout_duration)
+                    runtime
+                        .block_on(async { tokio::time::timeout(timeout_duration, rx.recv()).await })
                 });
 
                 match first_chunk {
-                    Ok((Some(StreamChunk::Headers { status_code, headers }), rx)) => {
+                    Ok(Some(StreamChunk::Headers {
+                        status_code,
+                        headers,
+                    })) => {
                         let reader = PyStreamReader {
-                            rx: StdMutex::new(Some(rx)),
-                            _request: StdMutex::new(Some(request)),
+                            rx: Arc::new(TokioMutex::new(Some(rx))),
+                            runtime: self.runtime.clone(),
+                            _request: Arc::new(StdMutex::new(Some(request))),
                             status_code,
                             headers_list: headers,
                         };
                         Ok(Py::new(py, reader)?.into_py(py))
                     }
-                    Ok((Some(StreamChunk::Error(e)), _)) => {
+                    Ok(Some(StreamChunk::Error(e))) => {
+                        drop(request);
+                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                            "Request failed: {}",
+                            e
+                        )))
+                    }
+                    Ok(Some(StreamChunk::Done)) => {
                         drop(request);
                         Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            format!("Request failed: {}", e)
+                            "Stream completed without headers",
                         ))
                     }
-                    Ok((Some(StreamChunk::Done), _)) => {
+                    Ok(Some(StreamChunk::Data(_))) => {
                         drop(request);
                         Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Stream completed without headers"
+                            "Unexpected data before headers",
                         ))
                     }
-                    Ok((Some(StreamChunk::Data(_)), _)) => {
+                    Ok(None) => {
                         drop(request);
                         Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Unexpected data before headers"
-                        ))
-                    }
-                    Ok((None, _)) => {
-                        drop(request);
-                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Stream closed unexpectedly"
+                            "Stream closed unexpectedly",
                         ))
                     }
                     Err(_) => {
                         drop(request);
-                        Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
-                            format!("Request timeout after {}ms", timeout_ms)
-                        ))
+                        Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                            "Request timeout after {}ms",
+                            timeout_ms
+                        )))
                     }
                 }
             }
             None => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "Failed to send stream request (session not found or concurrent limit reached)"
+                "Failed to send stream request (session not found or concurrent limit reached)",
             )),
         }
+    }
+
+    /// Execute streaming request using a session (true async version)
+    ///
+    /// Returns: Awaitable that resolves to PyStreamReader
+    #[pyo3(signature = (session_id, url, method, headers=None, body=None, allow_redirects=true))]
+    fn request_stream<'py>(
+        &self,
+        py: Python<'py>,
+        session_id: String,
+        url: String,
+        method: String,
+        headers: Option<Vec<(String, String)>>,
+        body: Option<Vec<u8>>,
+        allow_redirects: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let headers_vec = headers.unwrap_or_default();
+        let body_vec = body.unwrap_or_default();
+
+        let target = TargetRequest {
+            url,
+            method,
+            headers: headers_vec
+                .into_iter()
+                .map(|(name, value)| Header { name, value })
+                .collect(),
+            body: body_vec,
+        };
+
+        let manager = self.manager.clone();
+        let runtime = self.runtime.clone();
+
+        future_into_py(py, async move {
+            let (request, mut rx, timeout_ms) = manager
+                .send_request_stream(&session_id, &target, allow_redirects)
+                .ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "Failed to send stream request (session not found or concurrent limit reached)"
+                    )
+                })?;
+
+            let timeout_duration = Duration::from_millis(timeout_ms);
+            let first_chunk = tokio::time::timeout(timeout_duration, rx.recv()).await;
+
+            match first_chunk {
+                Ok(Some(StreamChunk::Headers {
+                    status_code,
+                    headers,
+                })) => Python::with_gil(|py| {
+                    let reader = PyStreamReader {
+                        rx: Arc::new(TokioMutex::new(Some(rx))),
+                        runtime,
+                        _request: Arc::new(StdMutex::new(Some(request))),
+                        status_code,
+                        headers_list: headers,
+                    };
+                    Ok::<PyObject, PyErr>(Py::new(py, reader)?.into_py(py))
+                }),
+                Ok(Some(StreamChunk::Error(e))) => {
+                    drop(request);
+                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                        "Request failed: {}",
+                        e
+                    )))
+                }
+                Ok(Some(StreamChunk::Done)) => {
+                    drop(request);
+                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "Stream completed without headers",
+                    ))
+                }
+                Ok(Some(StreamChunk::Data(_))) => {
+                    drop(request);
+                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "Unexpected data before headers",
+                    ))
+                }
+                Ok(None) => {
+                    drop(request);
+                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "Stream closed unexpectedly",
+                    ))
+                }
+                Err(_) => {
+                    drop(request);
+                    Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
+                        "Request timeout after {}ms",
+                        timeout_ms
+                    )))
+                }
+            }
+        })
     }
 
     /// Close a session
@@ -271,45 +492,47 @@ impl PyCronetClient {
         Ok(self.manager.list_sessions())
     }
 
-    /// Create a WebSocket connection
+    /// Create a WebSocket connection using a session
     ///
     /// Args:
-    ///     session_id: Session ID (must be created first with create_session)
+    ///     session_id: Session ID
     ///     url: WebSocket URL (ws:// or wss://)
-    ///     sub_protocols: Optional comma-separated sub-protocols
-    ///     origin: Optional origin header
     ///
     /// Returns:
-    ///     PyCronetWebSocket object
-    #[pyo3(signature = (session_id, url, sub_protocols=None, origin=None))]
+    ///     PyCronetWebSocket instance
+    #[pyo3(signature = (session_id, url, extra_headers=None))]
     fn websocket_connect(
         &self,
         session_id: String,
         url: String,
-        sub_protocols: Option<String>,
-        origin: Option<String>,
+        extra_headers: Option<Vec<(String, String)>>,
     ) -> PyResult<PyCronetWebSocket> {
-        let engine_ptr = self.manager.get_engine_ptr(&session_id)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Session '{}' not found", session_id)
-                )
+        let (engine_ptr, session_live) =
+            self.manager.get_engine_handle(&session_id).ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Session not found: {}",
+                    session_id
+                ))
             })?;
 
-        let ws = CronetWebSocket::new(engine_ptr).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e)
-        })?;
+        // Safety: engine_ptr comes from a live SessionManager session, and
+        // session_live keeps the session engine alive until the WebSocket drops.
+        let ws = unsafe { CronetWebSocket::new_with_lifetime(engine_ptr, session_live) }
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
-        ws.connect(
-            &url,
-            sub_protocols.as_deref(),
-            origin.as_deref(),
-        ).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e)
-        })?;
+        // Build "\r\n"-delimited header string from list of (name, value) tuples
+        let headers_str = extra_headers.map(|hdrs| {
+            hdrs.iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>()
+                .join("\r\n")
+        });
+
+        ws.connect(&url, None, None, headers_str.as_deref())
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         Ok(PyCronetWebSocket {
-            ws: Arc::new(StdMutex::new(Some(ws))),
+            inner: Arc::new(StdMutex::new(Some(ws))),
         })
     }
 }
@@ -317,8 +540,9 @@ impl PyCronetClient {
 /// Python wrapper for streaming response reader
 #[pyclass]
 pub struct PyStreamReader {
-    rx: StdMutex<Option<tokio::sync::mpsc::UnboundedReceiver<StreamChunk>>>,
-    _request: StdMutex<Option<CronetRequest>>,
+    rx: Arc<TokioMutex<Option<tokio::sync::mpsc::UnboundedReceiver<StreamChunk>>>>,
+    runtime: Arc<SafeRuntime>,
+    _request: Arc<StdMutex<Option<CronetRequest>>>,
     #[pyo3(get)]
     status_code: i32,
     headers_list: Vec<(String, String)>,
@@ -339,29 +563,26 @@ impl PyStreamReader {
     /// Read next chunk synchronously (releases GIL)
     /// Returns bytes or None when stream is complete
     fn next_chunk_sync(&self, py: Python) -> PyResult<Option<PyObject>> {
-        let rx_mutex = &self.rx;
+        let runtime = self.runtime.clone();
+        let rx = self.rx.clone();
 
         let chunk = py.allow_threads(|| {
-            let mut guard = rx_mutex.lock().unwrap();
-            if let Some(ref mut recv) = *guard {
-                recv.blocking_recv()
-            } else {
-                None
-            }
+            runtime.block_on(async {
+                let mut guard = rx.lock().await;
+                if let Some(ref mut recv) = *guard {
+                    recv.recv().await
+                } else {
+                    None
+                }
+            })
         });
 
         match chunk {
-            Some(StreamChunk::Data(data)) => {
-                Ok(Some(PyBytes::new_bound(py, &data).into()))
-            }
-            Some(StreamChunk::Done) | None => {
-                Ok(None)
-            }
-            Some(StreamChunk::Error(e)) => {
-                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Stream error: {}", e)
-                ))
-            }
+            Some(StreamChunk::Data(data)) => Ok(Some(PyBytes::new_bound(py, &data).into())),
+            Some(StreamChunk::Done) | None => Ok(None),
+            Some(StreamChunk::Error(e)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                format!("Stream error: {}", e),
+            )),
             Some(StreamChunk::Headers { .. }) => {
                 // Unexpected headers in data stream, skip and try next
                 self.next_chunk_sync(py)
@@ -369,10 +590,40 @@ impl PyStreamReader {
         }
     }
 
+    /// Read next chunk asynchronously
+    /// Returns awaitable that resolves to bytes or None
+    fn next_chunk<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let rx = self.rx.clone();
+
+        future_into_py(py, async move {
+            let mut guard = rx.lock().await;
+            let chunk = if let Some(ref mut recv) = *guard {
+                recv.recv().await
+            } else {
+                None
+            };
+            drop(guard);
+
+            match chunk {
+                Some(StreamChunk::Data(data)) => Python::with_gil(|py| {
+                    Ok::<Option<PyObject>, PyErr>(Some(PyBytes::new_bound(py, &data).into()))
+                }),
+                Some(StreamChunk::Done) | None => Ok(None::<PyObject>),
+                Some(StreamChunk::Error(e)) => {
+                    Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                        "Stream error: {}",
+                        e
+                    )))
+                }
+                Some(StreamChunk::Headers { .. }) => Ok(None::<PyObject>),
+            }
+        })
+    }
+
     /// Close the stream reader and release resources
     fn close(&self) -> PyResult<()> {
         // Drop receiver
-        if let Ok(mut guard) = self.rx.lock() {
+        if let Ok(mut guard) = self.rx.try_lock() {
             *guard = None;
         }
         // Drop request handle (triggers cancel if still active)
@@ -383,157 +634,121 @@ impl PyStreamReader {
     }
 }
 
-/// Python WebSocket wrapper
+/// Python-visible WebSocket handle
 #[pyclass]
 pub struct PyCronetWebSocket {
-    ws: Arc<StdMutex<Option<CronetWebSocket>>>,
+    inner: Arc<StdMutex<Option<CronetWebSocket>>>,
 }
 
 #[pymethods]
 impl PyCronetWebSocket {
     /// Send a text message
-    fn send(&self, message: &str) -> PyResult<()> {
-        let guard = self.ws.lock().unwrap();
+    fn send(&self, message: String) -> PyResult<()> {
+        let guard = self.inner.lock().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+        })?;
         let ws = guard.as_ref().ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
         })?;
-        ws.send_text(message).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e)
-        })
+        ws.send_text(&message)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     /// Send binary data
-    fn send_bytes(&self, data: &[u8]) -> PyResult<()> {
-        let guard = self.ws.lock().unwrap();
+    fn send_bytes(&self, data: Vec<u8>) -> PyResult<()> {
+        let guard = self.inner.lock().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+        })?;
         let ws = guard.as_ref().ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
         })?;
-        ws.send_binary(data).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e)
-        })
-    }
-
-    /// Receive the next event (blocks, releases GIL).
-    /// Returns a dict: {"type": "open"|"message"|"close"|"error", ...}
-    fn recv(&self, py: Python) -> PyResult<PyObject> {
-        let ws_arc = self.ws.clone();
-        let event = py.allow_threads(move || {
-            let guard = ws_arc.lock().unwrap();
-            if let Some(ref ws) = *guard {
-                ws.rx.recv().ok()
-            } else {
-                None
-            }
-        });
-
-        match event {
-            Some(WebSocketEvent::Open { protocol }) => {
-                let dict = PyDict::new_bound(py);
-                dict.set_item("type", "open")?;
-                dict.set_item("protocol", protocol)?;
-                Ok(dict.into())
-            }
-            Some(WebSocketEvent::Message { is_text, data }) => {
-                let dict = PyDict::new_bound(py);
-                dict.set_item("type", "message")?;
-                if is_text {
-                    let text = String::from_utf8_lossy(&data);
-                    dict.set_item("data", text.as_ref())?;
-                    dict.set_item("is_text", true)?;
-                } else {
-                    dict.set_item("data", PyBytes::new_bound(py, &data))?;
-                    dict.set_item("is_text", false)?;
-                }
-                Ok(dict.into())
-            }
-            Some(WebSocketEvent::Close { was_clean, code, reason }) => {
-                let dict = PyDict::new_bound(py);
-                dict.set_item("type", "close")?;
-                dict.set_item("was_clean", was_clean)?;
-                dict.set_item("code", code)?;
-                dict.set_item("reason", reason)?;
-                Ok(dict.into())
-            }
-            Some(WebSocketEvent::Error { net_error, message }) => {
-                let dict = PyDict::new_bound(py);
-                dict.set_item("type", "error")?;
-                dict.set_item("net_error", net_error)?;
-                dict.set_item("message", message)?;
-                Ok(dict.into())
-            }
-            None => {
-                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "WebSocket connection closed"
-                ))
-            }
-        }
-    }
-
-    /// Receive with timeout in milliseconds. Returns None on timeout.
-    #[pyo3(signature = (timeout_ms=5000))]
-    fn recv_timeout(&self, py: Python, timeout_ms: u64) -> PyResult<Option<PyObject>> {
-        let ws_arc = self.ws.clone();
-        let dur = Duration::from_millis(timeout_ms);
-        let event = py.allow_threads(move || {
-            let guard = ws_arc.lock().unwrap();
-            if let Some(ref ws) = *guard {
-                ws.rx.recv_timeout(dur).ok()
-            } else {
-                None
-            }
-        });
-
-        match event {
-            Some(evt) => {
-                // Reuse recv logic by sending event back through a temp channel
-                // Simpler: just inline the conversion
-                let dict = PyDict::new_bound(py);
-                match evt {
-                    WebSocketEvent::Open { protocol } => {
-                        dict.set_item("type", "open")?;
-                        dict.set_item("protocol", protocol)?;
-                    }
-                    WebSocketEvent::Message { is_text, data } => {
-                        dict.set_item("type", "message")?;
-                        if is_text {
-                            let text = String::from_utf8_lossy(&data);
-                            dict.set_item("data", text.as_ref())?;
-                            dict.set_item("is_text", true)?;
-                        } else {
-                            dict.set_item("data", PyBytes::new_bound(py, &data))?;
-                            dict.set_item("is_text", false)?;
-                        }
-                    }
-                    WebSocketEvent::Close { was_clean, code, reason } => {
-                        dict.set_item("type", "close")?;
-                        dict.set_item("was_clean", was_clean)?;
-                        dict.set_item("code", code)?;
-                        dict.set_item("reason", reason)?;
-                    }
-                    WebSocketEvent::Error { net_error, message } => {
-                        dict.set_item("type", "error")?;
-                        dict.set_item("net_error", net_error)?;
-                        dict.set_item("message", message)?;
-                    }
-                }
-                Ok(Some(dict.into()))
-            }
-            None => Ok(None),
-        }
+        ws.send_binary(&data)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     /// Initiate graceful close
-    #[pyo3(signature = (code=1000, reason=""))]
-    fn close(&self, code: u16, reason: &str) -> PyResult<()> {
-        let guard = self.ws.lock().unwrap();
-        if let Some(ref ws) = *guard {
-            ws.close(code, reason).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e)
-            })
-        } else {
-            Ok(())
+    fn close(&self, code: u16, reason: String) -> PyResult<()> {
+        let guard = self.inner.lock().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+        })?;
+        let ws = guard.as_ref().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
+        })?;
+        ws.close(code, &reason)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
+    }
+
+    /// Blocking receive next event (releases GIL)
+    fn recv(&self, py: Python) -> PyResult<PyObject> {
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            let guard = inner.lock().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+            })?;
+            let ws = guard.as_ref().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
+            })?;
+            ws.rx
+                .recv()
+                .map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Channel closed"))
+        })
+        .and_then(|evt| Python::with_gil(|py| ws_event_to_dict(py, evt)))
+    }
+
+    /// Receive with timeout in milliseconds (releases GIL). Returns None on timeout.
+    fn recv_timeout(&self, py: Python, timeout_ms: u64) -> PyResult<Option<PyObject>> {
+        let inner = self.inner.clone();
+        let result = py.allow_threads(|| {
+            let guard = inner.lock().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Lock error: {}", e))
+            })?;
+            let ws = guard.as_ref().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("WebSocket is closed")
+            })?;
+            Ok::<Option<WebSocketEvent>, PyErr>(
+                ws.rx.recv_timeout(Duration::from_millis(timeout_ms)).ok(),
+            )
+        })?;
+        match result {
+            Some(evt) => Python::with_gil(|py| ws_event_to_dict(py, evt).map(Some)),
+            None => Ok(None),
         }
     }
+}
+
+fn ws_event_to_dict(py: Python, evt: WebSocketEvent) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    match evt {
+        WebSocketEvent::Open { protocol } => {
+            dict.set_item("type", "open")?;
+            dict.set_item("protocol", protocol)?;
+        }
+        WebSocketEvent::Message { is_text, data } => {
+            dict.set_item("type", "message")?;
+            dict.set_item("is_text", is_text)?;
+            if is_text {
+                dict.set_item("data", String::from_utf8_lossy(&data).into_owned())?;
+            } else {
+                dict.set_item("data", PyBytes::new_bound(py, &data))?;
+            }
+        }
+        WebSocketEvent::Close {
+            was_clean,
+            code,
+            reason,
+        } => {
+            dict.set_item("type", "close")?;
+            dict.set_item("was_clean", was_clean)?;
+            dict.set_item("code", code)?;
+            dict.set_item("reason", reason)?;
+        }
+        WebSocketEvent::Error { net_error, message } => {
+            dict.set_item("type", "error")?;
+            dict.set_item("net_error", net_error)?;
+            dict.set_item("message", message)?;
+        }
+    }
+    Ok(dict.into())
 }
 
 /// Python module

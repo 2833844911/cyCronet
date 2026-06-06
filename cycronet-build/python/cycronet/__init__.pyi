@@ -2,7 +2,7 @@
 Type stubs for cycronet package
 """
 
-from typing import Dict, List, Tuple, Optional, Union, Any, Iterator, Generator
+from typing import Dict, List, Tuple, Optional, Union, Any, Iterator, AsyncIterator, Generator, overload
 from dataclasses import dataclass
 
 HeadersType = Union[Dict[str, str], List[Tuple[str, str]]]
@@ -69,19 +69,12 @@ class RequestError(Exception):
     pass
 
 class StreamResponse:
-    """流式 HTTP 响应对象"""
-    status_code: int
+    """流式 HTTP 响应对象 - 兼容 requests stream=True 风格"""
     url: str
-    _closed: bool
-    _session: Optional[Any]
+    encoding: Optional[str]
 
-    def __init__(self, stream_reader: Any, headers: Dict[str, List[str]],
-                 url: str = "", cookies: Optional[CookieJar] = None) -> None: ...
     @property
-    def content(self) -> bytes: ...
-    @property
-    def text(self) -> str: ...
-    def json(self) -> Any: ...
+    def status_code(self) -> int: ...
     @property
     def headers(self) -> Dict[str, str]: ...
     @property
@@ -90,11 +83,19 @@ class StreamResponse:
     def ok(self) -> bool: ...
     def raise_for_status(self) -> None: ...
     def iter_content(self, chunk_size: Optional[int] = None) -> Generator[bytes, None, None]: ...
-    def iter_lines(self, chunk_size: int = 512, decode_unicode: bool = False,
-                   delimiter: Optional[str] = None) -> Generator[Union[bytes, str], None, None]: ...
+    def iter_lines(self, chunk_size: int = 512, delimiter: Optional[str] = None) -> Generator[str, None, None]: ...
+    async def aiter_content(self, chunk_size: Optional[int] = None) -> AsyncIterator[bytes]: ...
+    async def aiter_lines(self, chunk_size: int = 512, delimiter: Optional[str] = None) -> AsyncIterator[str]: ...
+    @property
+    def content(self) -> bytes: ...
+    @property
+    def text(self) -> str: ...
+    def json(self) -> Any: ...
     def close(self) -> None: ...
     def __enter__(self) -> 'StreamResponse': ...
     def __exit__(self, *args: Any) -> None: ...
+    async def __aenter__(self) -> 'StreamResponse': ...
+    async def __aexit__(self, *args: Any) -> None: ...
 
 class Session:
     """Session 对象 - 兼容 requests.Session"""
@@ -452,9 +453,9 @@ def get(
     timeout: Optional[float] = None,
     verify: bool = True,
     allow_redirects: bool = True,
+    stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None,
-    stream: bool = False
+    chrometls: Optional[str] = None
 ) -> Union[Response, StreamResponse]: ...
 
 def post(
@@ -468,9 +469,9 @@ def post(
     timeout: Optional[float] = None,
     verify: bool = True,
     allow_redirects: bool = True,
+    stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None,
-    stream: bool = False
+    chrometls: Optional[str] = None
 ) -> Union[Response, StreamResponse]: ...
 
 def put(
@@ -484,9 +485,9 @@ def put(
     timeout: Optional[float] = None,
     verify: bool = True,
     allow_redirects: bool = True,
+    stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None,
-    stream: bool = False
+    chrometls: Optional[str] = None
 ) -> Union[Response, StreamResponse]: ...
 
 def delete(
@@ -498,9 +499,9 @@ def delete(
     timeout: Optional[float] = None,
     verify: bool = True,
     allow_redirects: bool = True,
+    stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None,
-    stream: bool = False
+    chrometls: Optional[str] = None
 ) -> Union[Response, StreamResponse]: ...
 
 def patch(
@@ -514,9 +515,9 @@ def patch(
     timeout: Optional[float] = None,
     verify: bool = True,
     allow_redirects: bool = True,
+    stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None,
-    stream: bool = False
+    chrometls: Optional[str] = None
 ) -> Union[Response, StreamResponse]: ...
 
 def head(
@@ -528,9 +529,9 @@ def head(
     timeout: Optional[float] = None,
     verify: bool = True,
     allow_redirects: bool = True,
+    stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None,
-    stream: bool = False
+    chrometls: Optional[str] = None
 ) -> Union[Response, StreamResponse]: ...
 
 def options(
@@ -542,9 +543,9 @@ def options(
     timeout: Optional[float] = None,
     verify: bool = True,
     allow_redirects: bool = True,
+    stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = None,
-    stream: bool = False
+    chrometls: Optional[str] = None
 ) -> Union[Response, StreamResponse]: ...
 
 def upload_file(

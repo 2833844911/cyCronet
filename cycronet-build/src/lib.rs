@@ -1,4 +1,3 @@
-
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
@@ -10,6 +9,9 @@ pub mod service;
 
 #[cfg(feature = "python")]
 pub mod python;
+
+#[cfg(feature = "cdll")]
+pub mod cdll;
 
 // Include generated bindings
 pub mod cronet_c {

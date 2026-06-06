@@ -3,7 +3,9 @@ Cookie management classes for cycronet.
 Designed to match requests.cookies.RequestsCookieJar behavior.
 """
 
-from typing import Dict, Optional, Union, Iterator, Tuple
+from typing import Dict, Iterator, Optional, Tuple, Union
+
+from ._utils import domain_matches as _domain_matches, normalize_cookie_domain
 
 
 class Cookie:
@@ -13,7 +15,7 @@ class Cookie:
                  seq: int = 0):
         self.name = name
         self.value = value
-        self.domain = self._normalize_domain(domain)
+        self.domain = Cookie._normalize_domain(domain)
         self.path = path or "/"
         # Monotonic write sequence — used for last-write-wins dedup when
         # several cookies with the same name coexist across domain buckets
@@ -22,35 +24,13 @@ class Cookie:
 
     @staticmethod
     def _normalize_domain(domain: str) -> str:
-        """Normalize domain: strip leading dot, lowercase, strip port."""
-        if not domain:
-            return ""
-        domain = domain.lower().strip()
-        if domain.startswith('.'):
-            domain = domain[1:]
-        if ':' in domain and not domain.startswith('['):
-            domain = domain.rsplit(':', 1)[0]
-        return domain
+        return normalize_cookie_domain(domain)
 
     def __repr__(self):
         return f"<Cookie {self.name}={self.value} for {self.domain}{self.path}>"
 
     def __str__(self):
         return f"{self.name}={self.value}"
-
-
-def _domain_matches(cookie_domain: str, request_domain: str) -> bool:
-    """Check if cookie domain matches request domain (RFC 6265).
-
-    "example.com" matches: example.com, sub.example.com
-    """
-    if not cookie_domain or not request_domain:
-        return not cookie_domain and not request_domain
-    if request_domain == cookie_domain:
-        return True
-    if request_domain.endswith('.' + cookie_domain):
-        return True
-    return False
 
 
 class CookieJar:
@@ -68,6 +48,7 @@ class CookieJar:
     """
 
     def __init__(self, default_domain: Optional[str] = None):
+        # Storage structure: {domain: {name: Cookie}}
         self._cookies: Dict[str, Dict[str, Cookie]] = {}
         self._default_domain: str = Cookie._normalize_domain(default_domain or "")
         self._seq_counter: int = 0

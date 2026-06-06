@@ -19,22 +19,14 @@ class Session:
     MAX_REDIRECTS = 30  # Same default as requests
 
     def __init__(self, client: 'CronetClient', session_id: str, verify: bool = True,
+                 headers: Optional[Dict[str, str]] = None,
                  default_domain: Optional[str] = None):
         self._client = client
         self._session_id = session_id
         self._closed = False
         self._verify = verify
         self._cookies = CookieJar(default_domain=default_domain)
-        self._default_headers = {}  # Store default headers for session
-
-    @property
-    def headers(self) -> Dict[str, str]:
-        """Get/set session default headers - similar to requests.Session().headers"""
-        return self._default_headers
-
-    @headers.setter
-    def headers(self, value: Dict[str, str]):
-        self._default_headers = dict(value) if value else {}
+        self._default_headers = dict(headers) if headers else {}  # Store default headers for session
 
     @property
     def cookies(self) -> CookieJar:
@@ -183,15 +175,13 @@ class Session:
             else:
                 normal_headers.append((k, v))
 
-        # Dedup by name using per-cookie write sequence — newest wins
-        # (matches requests / browser behaviour). See AsyncSession.request
-        # for rationale.
-        matched = [
-            c for c in self._cookies.iter_cookies()
-            if not c.domain or c.domain == domain or domain_matches(c.domain, domain)
-        ]
-        matched.sort(key=lambda c: c.seq)
-        merged_cookies = {c.name: c.value for c in matched}
+        # Get matching cookies from CookieJar (last-write-wins via seq)
+        all_cookies = []
+        for cookie in self._cookies.iter_cookies():
+            if not cookie.domain or cookie.domain == domain or domain_matches(cookie.domain, domain):
+                all_cookies.append(cookie)
+        all_cookies.sort(key=lambda c: c.seq)
+        merged_cookies = {c.name: c.value for c in all_cookies}
 
         if cookies:
             merged_cookies.update(cookies)
@@ -315,9 +305,11 @@ class Session:
             need_content_type=need_content_type
         )
 
+        # Always disable redirects at Rust layer, handle in Python
+        # Use request_sync for synchronous blocking call
         # Streaming path
         if stream:
-            stream_reader = self._client._client.request_stream_sync(
+            reader = self._client._client.request_stream_sync(
                 self._session_id,
                 url,
                 method.upper(),
@@ -326,14 +318,17 @@ class Session:
                 False  # Always False - handle redirects in Python
             )
 
-            # Parse headers from stream reader
+            status_code = reader.status_code
+            resp_headers_list = list(reader.headers)
+
             resp_headers = {}
-            for name, value in stream_reader.headers:
+            for name, value in resp_headers_list:
                 if name not in resp_headers:
                     resp_headers[name] = []
                 resp_headers[name].append(value)
 
-            status_code = stream_reader.status_code
+            # Update session cookies from response
+            self._update_cookies_from_response(resp_headers, domain)
 
             # Create response CookieJar
             response_cookies = CookieJar()
@@ -343,55 +338,38 @@ class Session:
                         store_domain = cookie_domain if cookie_domain else normalize_cookie_domain(domain)
                         response_cookies.set(cookie_name, cookie_value, store_domain, cookie_path)
 
-            # Update session cookies from response
-            self._update_cookies_from_response(resp_headers, domain)
-
             # Handle redirects for streaming
             if allow_redirects and status_code in (301, 302, 303, 307, 308):
-                stream_reader.close()
                 location = None
                 for header_name, values in resp_headers.items():
                     if header_name.lower() == 'location':
                         location = values[0] if values else None
                         break
-
                 if location:
+                    reader.close()
                     redirects_remaining = kwargs.get('_redirects_remaining')
                     if redirects_remaining is None:
                         redirects_remaining = self.MAX_REDIRECTS
                     if redirects_remaining <= 0:
-                        raise RequestError(
-                            f"Exceeded maximum redirects ({self.MAX_REDIRECTS})"
-                        )
+                        raise RequestError(f"Exceeded maximum redirects ({self.MAX_REDIRECTS})")
                     if not location.startswith(('http://', 'https://')):
                         from urllib.parse import urljoin
                         location = urljoin(url, location)
-
                     redirect_method = 'GET' if status_code == 303 else method
                     return self.request(
-                        redirect_method,
-                        location,
-                        params=None,
-                        headers=headers_to_prepare,
-                        cookies=cookies,
-                        data=None if status_code == 303 else data,
-                        json=None,
-                        timeout=timeout,
-                        verify=verify,
-                        allow_redirects=True,
-                        stream=True,
-                        _redirects_remaining=redirects_remaining - 1
+                        redirect_method, location,
+                        params=None, headers=headers_to_prepare, cookies=cookies,
+                        data=None if status_code == 303 else data, json=None,
+                        timeout=timeout, verify=verify, allow_redirects=True,
+                        stream=True, _redirects_remaining=redirects_remaining - 1
                     )
 
             return StreamResponse(
-                stream_reader=stream_reader,
-                headers=resp_headers,
-                url=url,
-                cookies=response_cookies
+                reader, url=url, cookies=response_cookies
             )
 
-        # Always disable redirects at Rust layer, handle in Python
-        response_dict = self._client._client.request(
+        # Non-streaming path
+        response_dict = self._client._client.request_sync(
             self._session_id,
             url,
             method.upper(),
@@ -776,34 +754,19 @@ class Session:
             'headers': response.headers
         }
 
-    def websocket(
-        self,
-        url: str,
-        *,
-        on_open=None,
-        on_message=None,
-        on_close=None,
-        on_error=None,
-    ):
+    def websocket(self, url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None):
         """Create a callback-based WebSocket connection.
 
         Args:
             url: WebSocket URL (ws:// or wss://)
-            on_open: Callback(ws) when connection is established
-            on_message: Callback(ws, message, is_text) when message received
-            on_close: Callback(ws, code, reason, was_clean) when closed
-            on_error: Callback(ws, error, net_error) on error
+            on_open: callback(ws) - called when connected
+            on_message: callback(ws, message, is_text) - called on message
+            on_close: callback(ws, code, reason, was_clean) - called on close
+            on_error: callback(ws, error, net_error) - called on error
+            headers: list of (name, value) tuples for custom HTTP headers
 
         Returns:
-            WebSocketApp object. Call ws.run_forever() or ws.run_in_background().
-
-        Example:
-            session = cycronet.CronetClient(verify=False)
-            ws = session.websocket("wss://example.com/ws",
-                on_open=lambda ws: ws.send("hi"),
-                on_message=lambda ws, msg, is_text: print(msg),
-            )
-            ws.run_forever()
+            WebSocketApp instance. Call .run_forever() or .run_in_background() to start.
         """
         from ._websocket import WebSocketApp
         return WebSocketApp(
@@ -812,6 +775,7 @@ class Session:
             on_message=on_message,
             on_close=on_close,
             on_error=on_error,
+            headers=headers,
         )
 
     def close(self):
