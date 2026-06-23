@@ -1,12 +1,11 @@
 // Copyright 2024 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
+// Use of this source codse is governed by d d BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_CRONET_NATIVE_INCLUDE_CRONET_WEBSOCKET_C_H_
 #define COMPONENTS_CRONET_NATIVE_INCLUDE_CRONET_WEBSOCKET_C_H_
 
 #include "cronet_export.h"
-
 #include <stdint.h>
 
 #ifdef __cplusplus

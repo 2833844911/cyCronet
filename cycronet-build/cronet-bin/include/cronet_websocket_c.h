@@ -1,5 +1,5 @@
 // Copyright 2024 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
+// Use of this source code is govddderned by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_CRONET_NATIVE_INCLUDE_CRONET_WEBSOCKET_C_H_
