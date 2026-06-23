@@ -201,7 +201,8 @@ def CronetClient(
     chrometls: Optional[str] = "chrome_144",
     headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
-    default_domain: Optional[str] = None
+    default_domain: Optional[str] = None,
+    thread_count: Optional[int] = None
 ) -> Session:
     """
     Create Cronet Session - similar to requests.Session()
@@ -218,6 +219,9 @@ def CronetClient(
             ``site.com``). Takes precedence over *base_url*.
             If neither is set, the host of the first outgoing request is
             used automatically (host-only).
+        thread_count: Number of Tokio worker threads for the underlying
+            runtime. Defaults to roughly half the CPU cores when omitted.
+            Must be greater than 0.
 
     Returns:
         Session object
@@ -254,7 +258,7 @@ def CronetClient(
     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
 
-    client = PyCronetClient()
+    client = PyCronetClient(thread_count)
     session_id = client.create_session(
         proxy_rules,
         not verify,  # skip_cert_verify = not verify
@@ -282,7 +286,8 @@ def AsyncCronetClient(
     chrometls: Optional[str] = "chrome_144",
     headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
-    default_domain: Optional[str] = None
+    default_domain: Optional[str] = None,
+    thread_count: Optional[int] = None
 ) -> AsyncSession:
     """
     Create async Cronet Session - supports async/await
@@ -298,6 +303,9 @@ def AsyncCronetClient(
         default_domain: Explicit default domain for the cookie jar.
             If neither is set, the host of the first outgoing request is
             used automatically (host-only).
+        thread_count: Number of Tokio worker threads for the underlying
+            runtime. Defaults to roughly half the CPU cores when omitted.
+            Must be greater than 0.
 
     Returns:
         AsyncSession object
@@ -331,7 +339,7 @@ def AsyncCronetClient(
     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
 
-    client = PyCronetClient()
+    client = PyCronetClient(thread_count)
     session_id = client.create_session(
         proxy_rules,
         not verify,

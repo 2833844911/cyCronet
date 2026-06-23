@@ -58,10 +58,31 @@ pub struct PyCronetClient {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl PyCronetClient {
+    ///
+    /// Args:
+    ///     thread_count: Optional number of Tokio worker threads. If omitted,
+    ///         defaults to roughly half the available CPU cores (at least 1).
+    ///         Must be greater than 0 when provided.
     #[new]
-    fn new() -> PyResult<Self> {
+    #[pyo3(signature = (thread_count=None))]
+    fn new(thread_count: Option<usize>) -> PyResult<Self> {
+        // Resolve worker thread count: explicit value or a sensible default
+        // based on available parallelism.
+        let worker_threads = match thread_count {
+            Some(0) => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "thread_count must be greater than 0",
+                ));
+            }
+            Some(n) => n,
+            None => std::thread::available_parallelism()
+                .map(|p| std::cmp::max(1, p.get() / 2))
+                .unwrap_or(1),
+        };
+
         // Create a multi-threaded Tokio runtime for async operations
         let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(worker_threads)
             .enable_all()
             .build()
             .map_err(|e| {

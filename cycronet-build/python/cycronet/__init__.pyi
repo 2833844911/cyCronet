@@ -406,7 +406,8 @@ def CronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_144"
+    chrometls: Optional[str] = "chrome_144",
+    thread_count: Optional[int] = None
 ) -> Session:
     """
     创建 Cronet Session - 类似 requests.Session()
@@ -416,6 +417,7 @@ def CronetClient(
         proxies: 代理配置，支持字典格式 {"https": "http://127.0.0.1:8080"} 或字符串
         timeout_ms: 超时时间（毫秒）
         chrometls: TLS 指纹配置名称（如 "chrome_144"）
+        thread_count: Tokio 工作线程数，省略时默认约为 CPU 核心数的一半，必须大于 0
 
     Returns:
         Session 对象
@@ -427,7 +429,8 @@ def AsyncCronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_144"
+    chrometls: Optional[str] = "chrome_144",
+    thread_count: Optional[int] = None
 ) -> AsyncSession:
     """
     创建异步 Cronet Session - 支持 async/await
@@ -437,6 +440,7 @@ def AsyncCronetClient(
         proxies: 代理配置，支持字典格式 {"https": "http://127.0.0.1:8080"} 或字符串
         timeout_ms: 超时时间（毫秒）
         chrometls: TLS 指纹配置名称（如 "chrome_144"）
+        thread_count: Tokio 工作线程数，省略时默认约为 CPU 核心数的一半，必须大于 0
 
     Returns:
         AsyncSession 对象
