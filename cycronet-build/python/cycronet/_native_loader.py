@@ -51,7 +51,22 @@ def _load_linux_libraries():
     """Load Linux SO libraries in the correct order."""
     package_dir = os.path.dirname(__file__)
 
-    # Loading order is important: load base dependencies first, then NSS, finally cronet
+    # Loading order is important: load base dependencies first, then NSS, finally cronet.
+    # Cronet also needs GLib/GObject on Linux; preload the bundled copies so minimal
+    # images do not need distro packages installed.
+    for lib_name in [
+        'libpcre.so.1',
+        'libffi.so.6',
+        'libglib-2.0.so.0',
+        'libgobject-2.0.so.0',
+    ]:
+        lib_path = os.path.join(package_dir, lib_name)
+        if os.path.exists(lib_path):
+            try:
+                ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
+            except Exception:
+                pass
+
     # 1. Load NSPR (NSS base dependency)
     for lib_name in ['libnspr4.so', 'libplc4.so', 'libplds4.so']:
         lib_path = os.path.join(package_dir, lib_name)

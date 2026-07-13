@@ -13,6 +13,7 @@ function Build-Windows {
 
     Write-Host "清理其他平台的库文件..." -ForegroundColor Yellow
     Remove-Item python\cycronet\*.so -ErrorAction SilentlyContinue
+    Remove-Item python\cycronet\*.so.* -ErrorAction SilentlyContinue
     Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
 
     Write-Host "复制 Windows x64 DLL..." -ForegroundColor Yellow
@@ -35,6 +36,7 @@ function Build-Windows32 {
 
     Write-Host "清理其他平台的库文件..." -ForegroundColor Yellow
     Remove-Item python\cycronet\*.so -ErrorAction SilentlyContinue
+    Remove-Item python\cycronet\*.so.* -ErrorAction SilentlyContinue
     Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
 
     Write-Host "复制 Windows x86 DLL..." -ForegroundColor Yellow
@@ -65,10 +67,12 @@ function Build-Linux {
     Write-Host "清理其他平台的库文件..." -ForegroundColor Yellow
     Remove-Item python\cycronet\*.dll -ErrorAction SilentlyContinue
     Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
+    Remove-Item python\cycronet\*.so -ErrorAction SilentlyContinue
+    Remove-Item python\cycronet\*.so.* -ErrorAction SilentlyContinue
 
     Write-Host "复制 Linux SO 和 NSS 依赖..." -ForegroundColor Yellow
     Copy-Item cronet-libs\linux\libcronet.144.0.7506.0.so python\cycronet\ -Force
-    Copy-Item linux_deps\*.so python\cycronet\ -Force
+    Copy-Item linux_deps\*.so* python\cycronet\ -Force
 
     Write-Host "检查 Docker..." -ForegroundColor Yellow
     try {
@@ -101,6 +105,7 @@ function Build-MacOS {
     Write-Host "清理其他平台的库文件..." -ForegroundColor Yellow
     Remove-Item python\cycronet\*.dll -ErrorAction SilentlyContinue
     Remove-Item python\cycronet\*.so -ErrorAction SilentlyContinue
+    Remove-Item python\cycronet\*.so.* -ErrorAction SilentlyContinue
 
     Write-Host "复制 macOS dylib..." -ForegroundColor Yellow
     Copy-Item cronet-libs\macos\libcronet.144.0.7506.0.dylib python\cycronet\ -Force
