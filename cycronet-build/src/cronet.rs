@@ -202,6 +202,7 @@ fn build_experimental_options(
     cipher_suites: Option<&[String]>,
     tls_curves: Option<&[String]>,
     tls_extensions: Option<&[String]>,
+    signature_algorithms: Option<&[String]>,
 ) -> Result<CString, String> {
     let mut options = serde_json::Map::new();
     options.insert("enable_cookie_store".to_string(), serde_json::json!(true));
@@ -219,6 +220,14 @@ fn build_experimental_options(
     if let Some(values) = tls_extensions {
         if !values.is_empty() {
             options.insert("tls_extensions".to_string(), serde_json::json!(values));
+        }
+    }
+    if let Some(values) = signature_algorithms {
+        if !values.is_empty() {
+            options.insert(
+                "signature_algorithms".to_string(),
+                serde_json::json!(values),
+            );
         }
     }
 
@@ -312,7 +321,7 @@ impl CronetEngine {
             Cronet_EngineParams_enable_brotli_set(params_ptr, true);
 
             // Enable Cookie Store to handle Set-Cookie in 302 redirects
-            let c_options = build_experimental_options(None, None, None)?;
+            let c_options = build_experimental_options(None, None, None, None)?;
             Cronet_EngineParams_experimental_options_set(params_ptr, c_options.as_ptr());
 
             // Start the engine
@@ -383,7 +392,7 @@ impl CronetEngine {
             }
 
             // Enable Cookie Store to handle Set-Cookie in 302 redirects
-            let c_options = build_experimental_options(None, None, None)?;
+            let c_options = build_experimental_options(None, None, None, None)?;
             Cronet_EngineParams_experimental_options_set(params, c_options.as_ptr());
 
             let res = Cronet_Engine_StartWithParams(engine, params);
@@ -1516,6 +1525,7 @@ pub struct SessionConfig {
     pub cipher_suites: Option<Vec<String>>,
     pub tls_curves: Option<Vec<String>>,
     pub tls_extensions: Option<Vec<String>>,
+    pub signature_algorithms: Option<Vec<String>>,
     pub allow_redirects: bool,
 }
 
@@ -1683,6 +1693,7 @@ impl SessionManager {
                 config.cipher_suites.as_deref(),
                 config.tls_curves.as_deref(),
                 config.tls_extensions.as_deref(),
+                config.signature_algorithms.as_deref(),
             ) {
                 Ok(options) => options,
                 Err(e) => {

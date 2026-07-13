@@ -245,6 +245,7 @@ pub unsafe extern "C" fn cycronet_session_create(
             cipher_suites: None,
             tls_curves: None,
             tls_extensions: None,
+            signature_algorithms: None,
             allow_redirects: true,
         }
     } else {
@@ -260,6 +261,7 @@ pub unsafe extern "C" fn cycronet_session_create(
             cipher_suites: c_str_array(c.cipher_suites, c.cipher_suites_count),
             tls_curves: c_str_array(c.tls_curves, c.tls_curves_count),
             tls_extensions: c_str_array(c.tls_extensions, c.tls_extensions_count),
+            signature_algorithms: None,
             allow_redirects: c.allow_redirects != 0,
         }
     };
