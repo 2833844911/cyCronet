@@ -299,6 +299,7 @@ pub async fn create_session(
         cipher_suites: None,
         tls_curves: None,
         tls_extensions: None,
+        signature_algorithms: None,
         allow_redirects: request.allow_redirects,
     };
 

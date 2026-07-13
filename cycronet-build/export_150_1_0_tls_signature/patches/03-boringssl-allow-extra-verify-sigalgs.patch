@@ -1,0 +1,64 @@
+diff --git a/ssl/ssl_privkey.cc b/ssl/ssl_privkey.cc
+index 2346aa425..99faff052 100644
+--- a/ssl/ssl_privkey.cc
++++ b/ssl/ssl_privkey.cc
+@@ -553,7 +553,12 @@ static bool sigalgs_unique(Span<const uint16_t> in_sigalgs) {
+   return true;
+ }
+ 
+-static bool set_sigalg_prefs(Array<uint16_t> *out, Span<const uint16_t> prefs) {
++static bool is_extra_advertised_sigalg(uint16_t sigalg) {
++  return sigalg == 0x0904 || sigalg == 0x0905 || sigalg == 0x0906;
++}
++
++static bool set_sigalg_prefs(Array<uint16_t> *out, Span<const uint16_t> prefs,
++                             bool allow_extra_advertised_sigalgs = false) {
+   if (!sigalgs_unique(prefs)) {
+     return false;
+   }
+@@ -572,7 +577,9 @@ static bool set_sigalg_prefs(Array<uint16_t> *out, Span<const uint16_t> prefs) {
+       // abstraction.
+       continue;
+     }
+-    if (get_signature_algorithm(pref) == nullptr) {
++    if (get_signature_algorithm(pref) == nullptr &&
++        !(allow_extra_advertised_sigalgs &&
++          is_extra_advertised_sigalg(pref))) {
+       OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SIGNATURE_ALGORITHM);
+       return false;
+     }
+@@ -904,7 +911,8 @@ int SSL_set1_sigalgs_list(SSL *ssl, const char *str) {
+ 
+ int SSL_CTX_set_verify_algorithm_prefs(SSL_CTX *ctx, const uint16_t *prefs,
+                                        size_t num_prefs) {
+-  return set_sigalg_prefs(&ctx->verify_sigalgs, Span(prefs, num_prefs));
++  return set_sigalg_prefs(&ctx->verify_sigalgs, Span(prefs, num_prefs),
++                          true);
+ }
+ 
+ int SSL_set_verify_algorithm_prefs(SSL *ssl, const uint16_t *prefs,
+@@ -914,5 +922,6 @@ int SSL_set_verify_algorithm_prefs(SSL *ssl, const uint16_t *prefs,
+     return 0;
+   }
+ 
+-  return set_sigalg_prefs(&ssl->config->verify_sigalgs, Span(prefs, num_prefs));
++  return set_sigalg_prefs(&ssl->config->verify_sigalgs, Span(prefs, num_prefs),
++                          true);
+ }
+diff --git a/ssl/ssl_test.cc b/ssl/ssl_test.cc
+index 779a2c37a..3ef8abb58 100644
+--- a/ssl/ssl_test.cc
++++ b/ssl/ssl_test.cc
+@@ -10309,6 +10309,12 @@ TEST(SSLTest, InvalidSignatureAlgorithm) {
+                                                    std::size(kDuplicatePrefs)));
+   EXPECT_FALSE(SSL_CTX_set_verify_algorithm_prefs(ctx.get(), kDuplicatePrefs,
+                                                   std::size(kDuplicatePrefs)));
++
++  static const uint16_t kExtraAdvertisedPrefs[] = {0x0904, 0x0905, 0x0906};
++  EXPECT_FALSE(SSL_CTX_set_signing_algorithm_prefs(
++      ctx.get(), kExtraAdvertisedPrefs, std::size(kExtraAdvertisedPrefs)));
++  EXPECT_TRUE(SSL_CTX_set_verify_algorithm_prefs(
++      ctx.get(), kExtraAdvertisedPrefs, std::size(kExtraAdvertisedPrefs)));
+ }
+ 
+ TEST(SSLTest, InvalidGroups) {

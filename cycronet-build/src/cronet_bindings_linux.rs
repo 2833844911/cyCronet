@@ -1890,6 +1890,7 @@ extern "C" {
         url: *const ::std::os::raw::c_char,
         sub_protocols: *const ::std::os::raw::c_char,
         origin: *const ::std::os::raw::c_char,
+        extra_headers: *const ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {

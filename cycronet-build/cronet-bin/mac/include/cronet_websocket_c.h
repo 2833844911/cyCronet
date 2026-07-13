@@ -54,12 +54,16 @@ Cronet_WebSocket_Create(Cronet_EnginePtr engine,
 // Connect to |url| (ws:// or wss://).
 // |sub_protocols| is comma-separated list (may be NULL).
 // |origin| is the Origin header (may be NULL).
+// |extra_headers| is "\r\n"-delimited "Name: Value" pairs (may be NULL).
+//   These headers are added to the HTTP upgrade request in order.
+//   Example: "User-Agent: MyApp\r\nAccept-Language: zh-CN\r\n"
 // Returns 0 on success, negative on error.
 CRONET_EXPORT int
 Cronet_WebSocket_Connect(Cronet_WebSocketPtr ws,
                          const char* url,
                          const char* sub_protocols,
-                         const char* origin);
+                         const char* origin,
+                         const char* extra_headers);
 
 // Send a message. Returns 0 on success, negative on error.
 CRONET_EXPORT int

@@ -1,0 +1,9 @@
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/FILES.txt
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/README.md
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/artifacts/SHA256SUMS.txt
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/artifacts/cycronet-150.1.0-cp38-abi3-macosx_11_0_arm64.whl
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/artifacts/libcronet.144.0.7506.0.chromium-out.dylib
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/artifacts/libcronet.144.0.7506.0.dylib
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/patches/01-cycronet-source-150.1.0-default-chrome150.patch
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/patches/02-chromium-cronet-tls-signature-algorithms.patch
+/Volumes/D/myxm/cyCronet/cycronet-build/export_150_1_0_tls_signature/patches/03-boringssl-allow-extra-verify-sigalgs.patch

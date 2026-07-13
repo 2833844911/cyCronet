@@ -9,7 +9,7 @@ from ._response import Response, StreamResponse
 from ._client import CronetClient
 
 
-def _send(method, url, *, stream=False, proxies=None, chrometls="chrome_144",
+def _send(method, url, *, stream=False, proxies=None, chrometls="chrome_150",
           timeout=None, verify=True, **kwargs):
     """Internal helper: keeps session alive when stream=True."""
     timeout_ms = int(timeout * 1000) if timeout else 30000
@@ -37,7 +37,7 @@ def get(
     allow_redirects: bool = True,
     stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     **kwargs
 ):
     """Send GET request - similar to requests.get()"""
@@ -59,7 +59,7 @@ def post(
     allow_redirects: bool = True,
     stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     **kwargs
 ):
     """Send POST request - similar to requests.post()"""
@@ -82,7 +82,7 @@ def put(
     allow_redirects: bool = True,
     stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     **kwargs
 ):
     """Send PUT request - similar to requests.put()"""
@@ -103,7 +103,7 @@ def delete(
     allow_redirects: bool = True,
     stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     **kwargs
 ):
     """Send DELETE request - similar to requests.delete()"""
@@ -125,7 +125,7 @@ def patch(
     allow_redirects: bool = True,
     stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     **kwargs
 ):
     """Send PATCH request - similar to requests.patch()"""
@@ -146,7 +146,7 @@ def head(
     allow_redirects: bool = True,
     stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     **kwargs
 ):
     """Send HEAD request - similar to requests.head()"""
@@ -166,7 +166,7 @@ def options(
     allow_redirects: bool = True,
     stream: bool = False,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     **kwargs
 ):
     """Send OPTIONS request - similar to requests.options()"""

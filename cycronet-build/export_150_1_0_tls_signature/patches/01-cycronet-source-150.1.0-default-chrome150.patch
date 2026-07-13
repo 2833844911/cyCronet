@@ -1,0 +1,507 @@
+diff --git a/cycronet-build/README.md b/cycronet-build/README.md
+index a6ce0f3..6c79988 100644
+--- a/cycronet-build/README.md
++++ b/cycronet-build/README.md
+@@ -89,13 +89,13 @@ response = requests.get('https://example.com')
+ # ✅ cycronet 同步 - 真实 Chrome 指纹
+ import cycronet
+ response = cycronet.get('https://example.com', verify=False)
+-# TLS 指纹：Chrome 144.x
++# TLS 指纹：Chrome 150.x
+ # HTTP/2：完全符合 Chrome 行为
+ 
+ # ✅ cycronet 异步 - 真实 Chrome 指纹 + 高性能
+ import asyncio
+ response = await cycronet.async_get('https://example.com', verify=False)
+-# TLS 指纹：Chrome 144.x
++# TLS 指纹：Chrome 150.x
+ # HTTP/2：完全符合 Chrome 行为
+ # 性能：支持并发，速度提升 5-10 倍
+ ```
+@@ -109,11 +109,11 @@ import cycronet
+ response = cycronet.get(
+     'https://cloudflare-protected-site.com',
+     headers={
+-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
++        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+         'Accept-Language': 'en-US,en;q=0.9',
+         'Accept-Encoding': 'gzip, deflate, br',
+-        'sec-ch-ua': '"Chromium";v="144", "Not A(Brand";v="99"',
++        'sec-ch-ua': '"Chromium";v="150", "Not A(Brand";v="99"',
+         'sec-ch-ua-mobile': '?0',
+         'sec-ch-ua-platform': '"Windows"',
+         'Sec-Fetch-Dest': 'document',
+@@ -135,10 +135,10 @@ Cycronet 支持自定义 TLS 指纹配置，可以模拟特定版本的 Chrome 
+ ```python
+ import cycronet
+ 
+-# 使用 Chrome 144 的 TLS 指纹配置
++# 使用 Chrome 150 的 TLS 指纹配置
+ session = cycronet.CronetClient(
+     verify=False,
+-    chrometls="chrome_144"  # 指定 TLS 配置
++    chrometls="chrome_150"  # 指定 TLS 配置
+ )
+ 
+ response = session.get('https://tls.peet.ws/api/all')
+@@ -149,12 +149,12 @@ session.close()
+ session = cycronet.CronetClient(
+     verify=False,
+     proxies={'https': 'http://127.0.0.1:21882'},
+-    chrometls="chrome_144"
++    chrometls="chrome_150"
+ )
+ ```
+ 
+ **支持的 TLS 配置：**
+-- `chrome_144`: Chrome 144 版本的 TLS 指纹（默认）
++- `chrome_150`: Chrome 150 版本的 TLS 指纹（默认）
+ 
+ #### 添加自定义 TLS 配置
+ 
+@@ -247,6 +247,7 @@ session.close()
+   - 必须使用标准的 TLS cipher suite 名称
+   - 顺序很重要，会影响 TLS 指纹
+   - `TLS_GREASE` 是 Chrome 的特殊值，用于防止协议僵化
++- `signature_algorithms`: TLS Signature Algorithms 列表（按顺序），支持算法名称或 `0xNNNN` 十六进制值
+ - `hex_codes`: 对应的十六进制代码（可选，仅用于文档）
+ 
+ **常用 Cipher Suites：**
+diff --git a/cycronet-build/pyproject.toml b/cycronet-build/pyproject.toml
+index 194cc75..890e034 100644
+--- a/cycronet-build/pyproject.toml
++++ b/cycronet-build/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "maturin"
+ 
+ [project]
+ name = "cycronet"
+-version = "144.5.0"
++version = "150.1.0"
+ description = "Python bindings for Cronet-Cloak - Authentic Chrome TLS/HTTP2 fingerprints with async support"
+ readme = "README.md"
+ requires-python = ">=3.7"
+@@ -51,4 +51,3 @@ exclude = [
+     "**/*.backup*",
+     "cronet-bin/**"
+ ]
+-
+diff --git a/cycronet-build/python/cycronet/__init__.pyi b/cycronet-build/python/cycronet/__init__.pyi
+index 55f64f3..e77608c 100644
+--- a/cycronet-build/python/cycronet/__init__.pyi
++++ b/cycronet-build/python/cycronet/__init__.pyi
+@@ -405,7 +405,7 @@ def CronetClient(
+     verify: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+     timeout_ms: int = 30000,
+-    chrometls: Optional[str] = "chrome_144"
++    chrometls: Optional[str] = "chrome_150"
+ ) -> Session:
+     """
+     创建 Cronet Session - 类似 requests.Session()
+@@ -414,7 +414,7 @@ def CronetClient(
+         verify: 是否验证 SSL 证书（False 跳过验证）
+         proxies: 代理配置，支持字典格式 {"https": "http://127.0.0.1:8080"} 或字符串
+         timeout_ms: 超时时间（毫秒）
+-        chrometls: TLS 指纹配置名称（如 "chrome_144"）
++        chrometls: TLS 指纹配置名称（如 "chrome_150"）
+ 
+     Returns:
+         Session 对象
+@@ -426,7 +426,7 @@ def AsyncCronetClient(
+     verify: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+     timeout_ms: int = 30000,
+-    chrometls: Optional[str] = "chrome_144"
++    chrometls: Optional[str] = "chrome_150"
+ ) -> AsyncSession:
+     """
+     创建异步 Cronet Session - 支持 async/await
+@@ -435,7 +435,7 @@ def AsyncCronetClient(
+         verify: 是否验证 SSL 证书（False 跳过验证）
+         proxies: 代理配置，支持字典格式 {"https": "http://127.0.0.1:8080"} 或字符串
+         timeout_ms: 超时时间（毫秒）
+-        chrometls: TLS 指纹配置名称（如 "chrome_144"）
++        chrometls: TLS 指纹配置名称（如 "chrome_150"）
+ 
+     Returns:
+         AsyncSession 对象
+diff --git a/cycronet-build/python/cycronet/_api_sync.py b/cycronet-build/python/cycronet/_api_sync.py
+index cabc72f..9f34db6 100644
+--- a/cycronet-build/python/cycronet/_api_sync.py
++++ b/cycronet-build/python/cycronet/_api_sync.py
+@@ -27,7 +27,7 @@ def get(
+     verify: bool = True,
+     allow_redirects: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     stream: bool = False,
+     **kwargs
+ ):
+@@ -62,7 +62,7 @@ def post(
+     verify: bool = True,
+     allow_redirects: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     stream: bool = False,
+     **kwargs
+ ):
+@@ -100,7 +100,7 @@ def put(
+     verify: bool = True,
+     allow_redirects: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     stream: bool = False,
+     **kwargs
+ ):
+@@ -136,7 +136,7 @@ def delete(
+     verify: bool = True,
+     allow_redirects: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     stream: bool = False,
+     **kwargs
+ ):
+@@ -171,7 +171,7 @@ def patch(
+     verify: bool = True,
+     allow_redirects: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     stream: bool = False,
+     **kwargs
+ ):
+@@ -207,7 +207,7 @@ def head(
+     verify: bool = True,
+     allow_redirects: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     stream: bool = False,
+     **kwargs
+ ):
+@@ -240,7 +240,7 @@ def options(
+     verify: bool = True,
+     allow_redirects: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     stream: bool = False,
+     **kwargs
+ ):
+diff --git a/cycronet-build/python/cycronet/_client.py b/cycronet-build/python/cycronet/_client.py
+index b7eba5d..f15c8b4 100644
+--- a/cycronet-build/python/cycronet/_client.py
++++ b/cycronet-build/python/cycronet/_client.py
+@@ -54,7 +54,8 @@ def set_tls_profiles(profiles: Dict[str, Dict]) -> None:
+                     "version": "Chrome test",
+                     "cipher_suites": ["TLS_AES_128_GCM_SHA256", ...],
+                     "tls_curves": ["X25519", ...],
+-                    "tls_extensions": [...]
++                    "tls_extensions": [...],
++                    "signature_algorithms": [...]
+                 }
+             }
+ 
+@@ -64,7 +65,8 @@ def set_tls_profiles(profiles: Dict[str, Dict]) -> None:
+             "chrome_test": {
+                 "cipher_suites": ["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"],
+                 "tls_curves": ["X25519"],
+-                "tls_extensions": []
++                "tls_extensions": [],
++                "signature_algorithms": []
+             }
+         })
+         session = cycronet.CronetClient(chrometls="chrome_test")
+@@ -78,14 +80,16 @@ def add_tls_profile(name: str, profile: Dict) -> None:
+ 
+     Args:
+         name: Profile name (e.g., "chrome_test")
+-        profile: Profile configuration with cipher_suites, tls_curves, tls_extensions
++        profile: Profile configuration with cipher_suites, tls_curves, tls_extensions,
++            signature_algorithms
+ 
+     Example:
+         import cycronet
+         cycronet.add_tls_profile("chrome_test", {
+             "cipher_suites": ["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"],
+             "tls_curves": ["X25519"],
+-            "tls_extensions": []
++            "tls_extensions": [],
++            "signature_algorithms": []
+         })
+     """
+     profiles = _load_tls_profiles()
+@@ -124,9 +128,46 @@ def _load_tls_profile(chrometls: Optional[str] = None) -> Optional[Dict[str, Lis
+         "cipher_suites": profile.get('cipher_suites', []) or [],
+         "tls_curves": profile.get('tls_curves', []) or [],
+         "tls_extensions": profile.get('tls_extensions', []) or [],
++        "signature_algorithms": profile.get('signature_algorithms', []) or [],
+     }
+ 
+ 
++def _create_session_with_tls_profile(
++    client,
++    proxy_rules,
++    skip_cert_verify,
++    timeout_ms,
++    cipher_suites,
++    tls_curves,
++    tls_extensions,
++    signature_algorithms,
++):
++    try:
++        return client.create_session(
++            proxy_rules,
++            skip_cert_verify,
++            timeout_ms,
++            cipher_suites,
++            tls_curves,
++            tls_extensions,
++            signature_algorithms,
++        )
++    except TypeError as exc:
++        if signature_algorithms:
++            raise RequestError(
++                "signature_algorithms requires a cycronet native extension "
++                "rebuilt with tls_signature_algorithms support"
++            ) from exc
++        return client.create_session(
++            proxy_rules,
++            skip_cert_verify,
++            timeout_ms,
++            cipher_suites,
++            tls_curves,
++            tls_extensions,
++        )
++
++
+ def _validate_proxy_url(proxy_url: str) -> None:
+     """Validate proxy URL format"""
+     if not proxy_url or not isinstance(proxy_url, str):
+@@ -183,7 +224,7 @@ def CronetClient(
+     verify: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+     timeout_ms: int = 30000,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     headers: Optional[Dict[str, str]] = None,
+     base_url: Optional[str] = None,
+     default_domain: Optional[str] = None,
+@@ -195,7 +236,7 @@ def CronetClient(
+         verify: Whether to verify SSL certificates (False to skip verification)
+         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
+         timeout_ms: Timeout in milliseconds
+-        chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
++        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
+         headers: Default headers for all requests in this session
+         base_url: Optional base URL whose hostname becomes the CookieJar's
+             default domain (host-only, like a browser host cookie — only
+@@ -216,7 +257,7 @@ def CronetClient(
+     Example:
+         session = CronetClient(verify=False)
+         session = CronetClient(proxies={"https": "http://127.0.0.1:8080"})
+-        session = CronetClient(verify=False, chrometls="chrome_144")
++        session = CronetClient(verify=False, chrometls="chrome_150")
+         session = CronetClient(headers={"User-Agent": "MyApp/1.0"})
+         session = CronetClient(base_url="https://www.example.com")
+         session = CronetClient(default_domain="example.com")  # cross-subdomain
+@@ -246,15 +287,18 @@ def CronetClient(
+     cipher_suites = tls_profile.get("cipher_suites", []) if tls_profile else None
+     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
+     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
++    signature_algorithms = tls_profile.get("signature_algorithms", []) if tls_profile else None
+ 
+     client = PyCronetClient()
+-    session_id = client.create_session(
++    session_id = _create_session_with_tls_profile(
++        client,
+         proxy_rules,
+         not verify,  # skip_cert_verify = not verify
+         timeout_ms,
+         cipher_suites,
+         tls_curves,
+-        tls_extensions
++        tls_extensions,
++        signature_algorithms
+     )
+ 
+     # Create a wrapped Session, save client reference
+@@ -274,7 +318,7 @@ def AsyncCronetClient(
+     verify: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+     timeout_ms: int = 30000,
+-    chrometls: Optional[str] = "chrome_144",
++    chrometls: Optional[str] = "chrome_150",
+     headers: Optional[Dict[str, str]] = None,
+     base_url: Optional[str] = None,
+     default_domain: Optional[str] = None,
+@@ -286,7 +330,7 @@ def AsyncCronetClient(
+         verify: Whether to verify SSL certificates (False to skip verification)
+         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
+         timeout_ms: Timeout in milliseconds
+-        chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
++        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
+         headers: Default headers for all requests in this session
+         base_url: Optional base URL whose hostname becomes the CookieJar's
+             default domain (host-only, like a browser host cookie — only
+@@ -332,15 +376,18 @@ def AsyncCronetClient(
+     cipher_suites = tls_profile.get("cipher_suites", []) if tls_profile else None
+     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
+     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
++    signature_algorithms = tls_profile.get("signature_algorithms", []) if tls_profile else None
+ 
+     client = PyCronetClient()
+-    session_id = client.create_session(
++    session_id = _create_session_with_tls_profile(
++        client,
+         proxy_rules,
+         not verify,
+         timeout_ms,
+         cipher_suites,
+         tls_curves,
+-        tls_extensions
++        tls_extensions,
++        signature_algorithms
+     )
+ 
+     class _ClientWrapper:
+diff --git a/cycronet-build/python/cycronet/tls_profiles.json b/cycronet-build/python/cycronet/tls_profiles.json
+index 3cef7a3..4a682c3 100644
+--- a/cycronet-build/python/cycronet/tls_profiles.json
++++ b/cycronet-build/python/cycronet/tls_profiles.json
+@@ -1,4 +1,49 @@
+ {
++   "chrome_150": {
++    "version": "Chrome 150",
++    "cipher_suites": [
++      "TLS_GREASE",
++      "TLS_AES_128_GCM_SHA256",
++      "TLS_AES_256_GCM_SHA384",
++      "TLS_CHACHA20_POLY1305_SHA256",
++      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
++      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
++      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
++      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
++      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
++      "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
++      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
++      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
++      "TLS_RSA_WITH_AES_128_GCM_SHA256",
++      "TLS_RSA_WITH_AES_256_GCM_SHA384",
++      "TLS_RSA_WITH_AES_128_CBC_SHA",
++      "TLS_RSA_WITH_AES_256_CBC_SHA"
++    ],
++    "tls_curves": [
++      "X25519MLKEM768",
++      "X25519",
++      "P-256",
++      "P-384"
++    ],
++    "tls_extensions": [
++    ],
++    "signature_algorithms": [
++      "0x0904",
++      "0x0905",
++      "0x0906",
++      "ecdsa_secp256r1_sha256",
++      "rsa_pss_rsae_sha256",
++      "rsa_pkcs1_sha256",
++      "0x0503",
++      "rsa_pss_rsae_sha384",
++      "rsa_pkcs1_sha384",
++      "rsa_pss_rsae_sha512",
++      "0x0601"
++    ],
++    "hex_codes": [
++
++    ]
++  },
+    "chrome_144": {
+     "version": "Chrome 144",
+     "cipher_suites": [
+diff --git a/cycronet-build/src/cronet.rs b/cycronet-build/src/cronet.rs
+index 3bbb1ed..d285145 100644
+--- a/cycronet-build/src/cronet.rs
++++ b/cycronet-build/src/cronet.rs
+@@ -954,6 +954,7 @@ pub struct SessionConfig {
+     pub cipher_suites: Option<Vec<String>>,
+     pub tls_curves: Option<Vec<String>>,
+     pub tls_extensions: Option<Vec<String>>,
++    pub signature_algorithms: Option<Vec<String>>,
+     pub allow_redirects: bool,
+ }
+ 
+@@ -1091,6 +1092,19 @@ impl SessionManager {
+                 }
+             }
+ 
++            if let Some(ref signature_algorithms) = config.signature_algorithms {
++                if !signature_algorithms.is_empty() {
++                    let signature_algorithms_json: Vec<String> = signature_algorithms
++                        .iter()
++                        .map(|s| format!("\"{}\"", s))
++                        .collect();
++                    options_parts.push(format!(
++                        "\"tls_signature_algorithms\":[{}]",
++                        signature_algorithms_json.join(",")
++                    ));
++                }
++            }
++
+             // Always set experimental_options (at least for enable_cookie_store)
+             if !options_parts.is_empty() {
+                 let experimental_options = format!("{{{}}}", options_parts.join(","));
+diff --git a/cycronet-build/src/python.rs b/cycronet-build/src/python.rs
+index a3bdc9b..0d9f904 100644
+--- a/cycronet-build/src/python.rs
++++ b/cycronet-build/src/python.rs
+@@ -31,10 +31,11 @@ impl PyCronetClient {
+     ///     cipher_suites: Optional list of TLS cipher suite names (e.g., ["TLS_AES_128_GCM_SHA256", "TLS_RSA_WITH_AES_128_CBC_SHA"])
+     ///     tls_curves: Optional list of TLS curve/group names (e.g., ["X25519MLKEM768", "X25519", "P-256"])
+     ///     tls_extensions: Optional list of TLS extension control names (e.g., ["application_settings_old"])
++    ///     signature_algorithms: Optional list of TLS signature algorithm names or hex codes (e.g., ["0x0904", "rsa_pss_rsae_sha256"])
+     ///
+     /// Returns:
+     ///     Session ID string
+-    #[pyo3(signature = (proxy_rules=None, skip_cert_verify=None, timeout_ms=None, cipher_suites=None, tls_curves=None, tls_extensions=None))]
++    #[pyo3(signature = (proxy_rules=None, skip_cert_verify=None, timeout_ms=None, cipher_suites=None, tls_curves=None, tls_extensions=None, signature_algorithms=None))]
+     fn create_session(
+         &self,
+         proxy_rules: Option<String>,
+@@ -43,6 +44,7 @@ impl PyCronetClient {
+         cipher_suites: Option<Vec<String>>,
+         tls_curves: Option<Vec<String>>,
+         tls_extensions: Option<Vec<String>>,
++        signature_algorithms: Option<Vec<String>>,
+     ) -> PyResult<String> {
+         let config = SessionConfig {
+             proxy_rules,
+@@ -51,6 +53,7 @@ impl PyCronetClient {
+             cipher_suites,
+             tls_curves,
+             tls_extensions,
++            signature_algorithms,
+             allow_redirects: true,  // 默认允许重定向
+         };
+ 
+diff --git a/cycronet-build/src/service.rs b/cycronet-build/src/service.rs
+index 8b74e4a..0733b7f 100644
+--- a/cycronet-build/src/service.rs
++++ b/cycronet-build/src/service.rs
+@@ -282,6 +282,11 @@ pub async fn create_session(
+         proxy_rules,
+         skip_cert_verify: request.skip_cert_verify,
+         timeout_ms: request.timeout_ms,
++        cipher_suites: None,
++        tls_curves: None,
++        tls_extensions: None,
++        signature_algorithms: None,
++        allow_redirects: true,
+     };
+ 
+     let session_id = state.session_manager.create_session(config);

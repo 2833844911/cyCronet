@@ -54,7 +54,8 @@ def set_tls_profiles(profiles: Dict[str, Dict]) -> None:
                     "version": "Chrome test",
                     "cipher_suites": ["TLS_AES_128_GCM_SHA256", ...],
                     "tls_curves": ["X25519", ...],
-                    "tls_extensions": [...]
+                    "tls_extensions": [...],
+                    "signature_algorithms": [...]
                 }
             }
 
@@ -64,7 +65,8 @@ def set_tls_profiles(profiles: Dict[str, Dict]) -> None:
             "chrome_test": {
                 "cipher_suites": ["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"],
                 "tls_curves": ["X25519"],
-                "tls_extensions": []
+                "tls_extensions": [],
+                "signature_algorithms": []
             }
         })
         session = cycronet.CronetClient(chrometls="chrome_test")
@@ -78,14 +80,16 @@ def add_tls_profile(name: str, profile: Dict) -> None:
 
     Args:
         name: Profile name (e.g., "chrome_test")
-        profile: Profile configuration with cipher_suites, tls_curves, tls_extensions
+        profile: Profile configuration with cipher_suites, tls_curves, tls_extensions,
+            signature_algorithms
 
     Example:
         import cycronet
         cycronet.add_tls_profile("chrome_test", {
             "cipher_suites": ["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"],
             "tls_curves": ["X25519"],
-            "tls_extensions": []
+            "tls_extensions": [],
+            "signature_algorithms": []
         })
     """
     profiles = _load_tls_profiles()
@@ -109,8 +113,11 @@ def clear_tls_profiles_cache() -> None:
 
 def _load_tls_profile(chrometls: Optional[str] = None) -> Optional[Dict[str, List[str]]]:
     """Get TLS fingerprint configuration for a specific profile"""
+    if chrometls is None:
+        return None
+
     profiles = _load_tls_profiles()
-    if chrometls is None or chrometls not in profiles:
+    if chrometls not in profiles:
         available = ', '.join(sorted(profiles.keys())) if profiles else 'none'
         raise RequestError(
             f"TLS profile '{chrometls}' not found. Available profiles: {available}"
@@ -121,6 +128,7 @@ def _load_tls_profile(chrometls: Optional[str] = None) -> Optional[Dict[str, Lis
         "cipher_suites": profile.get('cipher_suites', []) or [],
         "tls_curves": profile.get('tls_curves', []) or [],
         "tls_extensions": profile.get('tls_extensions', []) or [],
+        "signature_algorithms": profile.get('signature_algorithms', []) or [],
     }
 
 
@@ -133,6 +141,42 @@ def _extract_base_url_host(base_url: Optional[str]) -> str:
     if host.startswith("."):
         host = host[1:]
     return host
+
+
+def _create_session_with_tls_profile(
+    client,
+    proxy_rules,
+    skip_cert_verify,
+    timeout_ms,
+    cipher_suites,
+    tls_curves,
+    tls_extensions,
+    signature_algorithms,
+):
+    try:
+        return client.create_session(
+            proxy_rules,
+            skip_cert_verify,
+            timeout_ms,
+            cipher_suites,
+            tls_curves,
+            tls_extensions,
+            signature_algorithms,
+        )
+    except TypeError as exc:
+        if signature_algorithms:
+            raise RequestError(
+                "signature_algorithms requires a cycronet native extension "
+                "rebuilt with tls_signature_algorithms support"
+            ) from exc
+        return client.create_session(
+            proxy_rules,
+            skip_cert_verify,
+            timeout_ms,
+            cipher_suites,
+            tls_curves,
+            tls_extensions,
+        )
 
 
 def _validate_proxy_url(proxy_url: str) -> None:
@@ -198,7 +242,7 @@ def CronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
     default_domain: Optional[str] = None
@@ -210,7 +254,7 @@ def CronetClient(
         verify: Whether to verify SSL certificates (False to skip verification)
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
-        chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
+        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
         headers: Default headers for all requests in this session
         base_url: Optional base URL; its host is used as the default cookie
             domain when *default_domain* is not set.
@@ -225,7 +269,7 @@ def CronetClient(
     Example:
         session = CronetClient(verify=False)
         session = CronetClient(proxies={"https": "http://127.0.0.1:8080"})
-        session = CronetClient(verify=False, chrometls="chrome_144")
+        session = CronetClient(verify=False, chrometls="chrome_150")
         session = CronetClient(headers={"User-Agent": "MyApp/1.0"})
         response = session.get("https://example.com")
     """
@@ -253,15 +297,18 @@ def CronetClient(
     cipher_suites = tls_profile.get("cipher_suites", []) if tls_profile else None
     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
+    signature_algorithms = tls_profile.get("signature_algorithms", []) if tls_profile else None
 
     client = PyCronetClient()
-    session_id = client.create_session(
+    session_id = _create_session_with_tls_profile(
+        client,
         proxy_rules,
         not verify,  # skip_cert_verify = not verify
         timeout_ms,
         cipher_suites,
         tls_curves,
-        tls_extensions
+        tls_extensions,
+        signature_algorithms
     )
 
     # Create a wrapped Session, save client reference
@@ -279,7 +326,7 @@ def AsyncCronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_144",
+    chrometls: Optional[str] = "chrome_150",
     headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
     default_domain: Optional[str] = None
@@ -291,7 +338,7 @@ def AsyncCronetClient(
         verify: Whether to verify SSL certificates (False to skip verification)
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
-        chrometls: TLS fingerprint configuration name (e.g. "chrome_144")
+        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
         headers: Default headers for all requests in this session
         base_url: Optional base URL; its host is used as the default cookie
             domain when *default_domain* is not set.
@@ -330,15 +377,18 @@ def AsyncCronetClient(
     cipher_suites = tls_profile.get("cipher_suites", []) if tls_profile else None
     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
+    signature_algorithms = tls_profile.get("signature_algorithms", []) if tls_profile else None
 
     client = PyCronetClient()
-    session_id = client.create_session(
+    session_id = _create_session_with_tls_profile(
+        client,
         proxy_rules,
         not verify,
         timeout_ms,
         cipher_suites,
         tls_curves,
-        tls_extensions
+        tls_extensions,
+        signature_algorithms
     )
 
     class _ClientWrapper:

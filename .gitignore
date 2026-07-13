@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+
+cycronet-build/.DS_Store
+cycronet-build/.cargo/
+cycronet-build/cronet-bin/.DS_Store
+cycronet-build/cronet-libs/.DS_Store
+cycronet-build/target/
+cycronet-build/python/cycronet/__pycache__/
+cycronet-build/python/cycronet/*.pyc
+cycronet-build/python/cycronet/libcronet.*.dylib
+cycronet-build/python/cycronet/libcronet.*.so.pkg
+
+cycronet-build/export_150_1_0_tls_signature.zip
+cycronet-build/export_150_1_0_tls_signature/.DS_Store
+cycronet-build/export_150_1_0_tls_signature/artifacts/*.whl
+cycronet-build/export_150_1_0_tls_signature/artifacts/*.dylib

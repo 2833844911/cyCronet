@@ -954,6 +954,7 @@ pub struct SessionConfig {
     pub cipher_suites: Option<Vec<String>>,
     pub tls_curves: Option<Vec<String>>,
     pub tls_extensions: Option<Vec<String>>,
+    pub signature_algorithms: Option<Vec<String>>,
     pub allow_redirects: bool,
 }
 
@@ -1087,6 +1088,19 @@ impl SessionManager {
                     options_parts.push(format!(
                         "\"tls_extensions\":[{}]",
                         tls_extensions_json.join(",")
+                    ));
+                }
+            }
+
+            if let Some(ref signature_algorithms) = config.signature_algorithms {
+                if !signature_algorithms.is_empty() {
+                    let signature_algorithms_json: Vec<String> = signature_algorithms
+                        .iter()
+                        .map(|s| format!("\"{}\"", s))
+                        .collect();
+                    options_parts.push(format!(
+                        "\"tls_signature_algorithms\":[{}]",
+                        signature_algorithms_json.join(",")
                     ));
                 }
             }
@@ -1523,10 +1537,17 @@ impl CronetWebSocket {
         })
     }
 
-    pub fn connect(&self, url: &str, sub_protocols: Option<&str>, origin: Option<&str>) -> Result<(), String> {
+    pub fn connect(
+        &self,
+        url: &str,
+        sub_protocols: Option<&str>,
+        origin: Option<&str>,
+        extra_headers: Option<&str>,
+    ) -> Result<(), String> {
         let c_url = safe_cstring(url, "ws_url")?;
         let c_protos = sub_protocols.map(|s| safe_cstring(s, "ws_sub_protocols")).transpose()?;
         let c_origin = origin.map(|s| safe_cstring(s, "ws_origin")).transpose()?;
+        let c_extra_headers = extra_headers.map(|s| safe_cstring(s, "ws_extra_headers")).transpose()?;
 
         let ret = unsafe {
             Cronet_WebSocket_Connect(
@@ -1534,6 +1555,7 @@ impl CronetWebSocket {
                 c_url.as_ptr(),
                 c_protos.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
                 c_origin.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                c_extra_headers.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
             )
         };
         if ret != 0 {

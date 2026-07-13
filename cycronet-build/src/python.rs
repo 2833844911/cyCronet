@@ -86,10 +86,11 @@ impl PyCronetClient {
     ///     cipher_suites: Optional list of TLS cipher suite names (e.g., ["TLS_AES_128_GCM_SHA256", "TLS_RSA_WITH_AES_128_CBC_SHA"])
     ///     tls_curves: Optional list of TLS curve/group names (e.g., ["X25519MLKEM768", "X25519", "P-256"])
     ///     tls_extensions: Optional list of TLS extension control names (e.g., ["application_settings_old"])
+    ///     signature_algorithms: Optional list of TLS signature algorithm names or hex codes (e.g., ["0x0904", "rsa_pss_rsae_sha256"])
     ///
     /// Returns:
     ///     Session ID string
-    #[pyo3(signature = (proxy_rules=None, skip_cert_verify=None, timeout_ms=None, cipher_suites=None, tls_curves=None, tls_extensions=None))]
+    #[pyo3(signature = (proxy_rules=None, skip_cert_verify=None, timeout_ms=None, cipher_suites=None, tls_curves=None, tls_extensions=None, signature_algorithms=None))]
     fn create_session(
         &self,
         proxy_rules: Option<String>,
@@ -98,6 +99,7 @@ impl PyCronetClient {
         cipher_suites: Option<Vec<String>>,
         tls_curves: Option<Vec<String>>,
         tls_extensions: Option<Vec<String>>,
+        signature_algorithms: Option<Vec<String>>,
     ) -> PyResult<String> {
         let config = SessionConfig {
             proxy_rules,
@@ -106,7 +108,8 @@ impl PyCronetClient {
             cipher_suites,
             tls_curves,
             tls_extensions,
-            allow_redirects: true, // 默认允许重定向
+            signature_algorithms,
+            allow_redirects: true,  // 默认允许重定向
         };
 
         let session_id = self.manager.create_session(config);
@@ -507,17 +510,14 @@ impl PyCronetClient {
         url: String,
         extra_headers: Option<Vec<(String, String)>>,
     ) -> PyResult<PyCronetWebSocket> {
-        let (engine_ptr, session_live) =
-            self.manager.get_engine_handle(&session_id).ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                    "Session not found: {}",
-                    session_id
-                ))
-            })?;
+        let engine_ptr = self.manager.get_engine_ptr(&session_id).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Session not found: {}",
+                session_id
+            ))
+        })?;
 
-        // Safety: engine_ptr comes from a live SessionManager session, and
-        // session_live keeps the session engine alive until the WebSocket drops.
-        let ws = unsafe { CronetWebSocket::new_with_lifetime(engine_ptr, session_live) }
+        let ws = CronetWebSocket::new(engine_ptr)
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         // Build "\r\n"-delimited header string from list of (name, value) tuples
