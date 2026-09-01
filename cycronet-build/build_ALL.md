@@ -124,8 +124,8 @@ docker run --rm `
 docker run --rm `
   -v "${PWD}:/io" `
   -e LD_LIBRARY_PATH=/io/python/cycronet `
-  -e HTTPS_PROXY=http://host.docker.internal:21882 `
-  -e HTTP_PROXY=http://host.docker.internal:21882 `
+  -e HTTPS_PROXY=http://host.docker.internal:7897 `
+  -e HTTP_PROXY=http://host.docker.internal:7897 `
   --add-host=host.docker.internal:host-gateway `
   ghcr.io/pyo3/maturin:latest `
   build --release --target x86_64-unknown-linux-gnu --compatibility manylinux_2_24

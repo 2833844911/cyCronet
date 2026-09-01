@@ -201,7 +201,7 @@ def CronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_150",
+    chrometls: Optional[str] = "chrome_152",
     headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
     default_domain: Optional[str] = None,
@@ -214,7 +214,7 @@ def CronetClient(
         verify: Whether to verify SSL certificates (False to skip verification)
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
-        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
+        chrometls: TLS fingerprint configuration name (e.g. "chrome_152")
         headers: Default headers for all requests in this session
         base_url: Optional base URL; its host is used as the default cookie
             domain when *default_domain* is not set.
@@ -232,7 +232,7 @@ def CronetClient(
     Example:
         session = CronetClient(verify=False)
         session = CronetClient(proxies={"https": "http://127.0.0.1:8080"})
-        session = CronetClient(verify=False, chrometls="chrome_150")
+        session = CronetClient(verify=False, chrometls="chrome_152")
         session = CronetClient(headers={"User-Agent": "MyApp/1.0"})
         response = session.get("https://example.com")
     """
@@ -288,7 +288,7 @@ def AsyncCronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_150",
+    chrometls: Optional[str] = "chrome_152",
     headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
     default_domain: Optional[str] = None,
@@ -301,7 +301,7 @@ def AsyncCronetClient(
         verify: Whether to verify SSL certificates (False to skip verification)
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
-        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
+        chrometls: TLS fingerprint configuration name (e.g. "chrome_152")
         headers: Default headers for all requests in this session
         base_url: Optional base URL; its host is used as the default cookie
             domain when *default_domain* is not set.

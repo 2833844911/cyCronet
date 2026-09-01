@@ -406,7 +406,7 @@ def CronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_150",
+    chrometls: Optional[str] = "chrome_152",
     thread_count: Optional[int] = None
 ) -> Session:
     """
@@ -416,7 +416,7 @@ def CronetClient(
         verify: 是否验证 SSL 证书（False 跳过验证）
         proxies: 代理配置，支持字典格式 {"https": "http://127.0.0.1:8080"} 或字符串
         timeout_ms: 超时时间（毫秒）
-        chrometls: TLS 指纹配置名称（如 "chrome_150"）
+        chrometls: TLS 指纹配置名称（如 "chrome_152"）
         thread_count: Tokio 工作线程数，省略时默认约为 CPU 核心数的一半，必须大于 0
 
     Returns:
@@ -429,7 +429,7 @@ def AsyncCronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_150",
+    chrometls: Optional[str] = "chrome_152",
     thread_count: Optional[int] = None
 ) -> AsyncSession:
     """
@@ -439,7 +439,7 @@ def AsyncCronetClient(
         verify: 是否验证 SSL 证书（False 跳过验证）
         proxies: 代理配置，支持字典格式 {"https": "http://127.0.0.1:8080"} 或字符串
         timeout_ms: 超时时间（毫秒）
-        chrometls: TLS 指纹配置名称（如 "chrome_150"）
+        chrometls: TLS 指纹配置名称（如 "chrome_152"）
         thread_count: Tokio 工作线程数，省略时默认约为 CPU 核心数的一半，必须大于 0
 
     Returns:

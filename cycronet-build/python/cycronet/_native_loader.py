@@ -51,6 +51,12 @@ def _load_linux_libraries():
     """Load Linux SO libraries in the correct order."""
     package_dir = os.path.dirname(__file__)
 
+    # Silence GLib's "Using the 'memory' GSettings backend" message that Cronet's
+    # system proxy-config service emits on headless Linux (no dconf). Cycronet sets
+    # proxies explicitly and never uses system GSettings, so forcing the memory
+    # backend is safe. setdefault respects any user-provided override.
+    os.environ.setdefault("GSETTINGS_BACKEND", "memory")
+
     # Loading order is important: load base dependencies first, then NSS, finally cronet.
     # Cronet also needs GLib/GObject on Linux; preload the bundled copies so minimal
     # images do not need distro packages installed.
