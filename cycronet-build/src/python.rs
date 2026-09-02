@@ -90,7 +90,7 @@ impl PyCronetClient {
     ///
     /// Returns:
     ///     Session ID string
-    #[pyo3(signature = (proxy_rules=None, skip_cert_verify=None, timeout_ms=None, cipher_suites=None, tls_curves=None, tls_extensions=None, signature_algorithms=None))]
+    #[pyo3(signature = (proxy_rules=None, skip_cert_verify=None, timeout_ms=None, cipher_suites=None, tls_curves=None, tls_extensions=None, signature_algorithms=None, user_agent=None, accept_language=None))]
     fn create_session(
         &self,
         proxy_rules: Option<String>,
@@ -100,16 +100,20 @@ impl PyCronetClient {
         tls_curves: Option<Vec<String>>,
         tls_extensions: Option<Vec<String>>,
         signature_algorithms: Option<Vec<String>>,
+        user_agent: Option<String>,
+        accept_language: Option<String>,
     ) -> PyResult<String> {
         let config = SessionConfig {
             proxy_rules,
             skip_cert_verify: skip_cert_verify.unwrap_or(false),
             timeout_ms: timeout_ms.unwrap_or(30000),
+            user_agent,
+            accept_language,
             cipher_suites,
             tls_curves,
             tls_extensions,
             signature_algorithms,
-            allow_redirects: true,  // 默认允许重定向
+            allow_redirects: true, // 默认允许重定向
         };
 
         let session_id = self.manager.create_session(config);
@@ -503,12 +507,14 @@ impl PyCronetClient {
     ///
     /// Returns:
     ///     PyCronetWebSocket instance
-    #[pyo3(signature = (session_id, url, extra_headers=None))]
+    #[pyo3(signature = (session_id, url, extra_headers=None, origin=None, sub_protocols=None))]
     fn websocket_connect(
         &self,
         session_id: String,
         url: String,
         extra_headers: Option<Vec<(String, String)>>,
+        origin: Option<String>,
+        sub_protocols: Option<String>,
     ) -> PyResult<PyCronetWebSocket> {
         let engine_ptr = self.manager.get_engine_ptr(&session_id).ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
@@ -520,16 +526,34 @@ impl PyCronetClient {
         let ws = CronetWebSocket::new(engine_ptr)
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
-        // Build "\r\n"-delimited header string from list of (name, value) tuples
-        let headers_str = extra_headers.map(|hdrs| {
-            hdrs.iter()
-                .map(|(k, v)| format!("{}: {}", k, v))
-                .collect::<Vec<_>>()
-                .join("\r\n")
-        });
+        // Cronet's C API takes CRLF-delimited header lines. Validate fields at
+        // the Python boundary so an injected newline cannot alter the upgrade.
+        let headers_str = extra_headers
+            .map(|hdrs| {
+                let mut fields = Vec::with_capacity(hdrs.len());
+                for (name, value) in hdrs {
+                    if name.is_empty()
+                        || name.contains(['\r', '\n', ':'])
+                        || value.contains(['\r', '\n'])
+                    {
+                        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "Invalid WebSocket header: {}",
+                            name
+                        )));
+                    }
+                    fields.push(format!("{}: {}", name, value));
+                }
+                Ok(fields.join("\r\n"))
+            })
+            .transpose()?;
 
-        ws.connect(&url, None, None, headers_str.as_deref())
-            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
+        ws.connect(
+            &url,
+            sub_protocols.as_deref(),
+            origin.as_deref(),
+            headers_str.as_deref(),
+        )
+        .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         Ok(PyCronetWebSocket {
             inner: Arc::new(StdMutex::new(Some(ws))),

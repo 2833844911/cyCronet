@@ -1,5 +1,6 @@
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn main() {
     // 1. Generate Bindings for Cronet C API
@@ -153,7 +154,31 @@ fn main() {
     }
 
     // 3. Link against the Cronet DLL/SO
-    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    //
+    // The distributed macOS Cronet dylib carries a legacy relative install
+    // name (./libcronet...). Maturin cannot repair that dependency while
+    // packaging a wheel. Link a private copy with a loader-relative install
+    // name instead; the versioned dylib is included beside the extension.
+    let mut link_dir = lib_dir.clone();
+    if target_os == "macos" {
+        let dylib_name = format!("libcronet.{}.dylib", version);
+        let staged_dir = out_path.join("cronet-link");
+        std::fs::create_dir_all(&staged_dir).expect("Failed to create Cronet link directory");
+        let staged_dylib = staged_dir.join("libcronet.dylib");
+        std::fs::copy(lib_dir.join("libcronet.dylib"), &staged_dylib)
+            .expect("Failed to stage Cronet dylib for linking");
+        let status = Command::new("install_name_tool")
+            .arg("-id")
+            .arg(format!("@loader_path/{}", dylib_name))
+            .arg(&staged_dylib)
+            .status()
+            .expect("Failed to run install_name_tool for Cronet dylib");
+        if !status.success() {
+            panic!("install_name_tool failed while preparing Cronet dylib");
+        }
+        link_dir = staged_dir;
+    }
+    println!("cargo:rustc-link-search=native={}", link_dir.display());
     println!("cargo:rustc-link-lib=dylib=cronet");
 
     // Linux: Set rpath to look for .so in the same directory as the extension module

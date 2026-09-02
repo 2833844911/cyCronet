@@ -4,9 +4,9 @@ use crate::VERBOSE_MODE;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{oneshot, mpsc};
+use tokio::sync::{mpsc, oneshot};
 
 // Macro for verbose logging
 macro_rules! verbose_log {
@@ -21,9 +21,7 @@ macro_rules! verbose_log {
 fn safe_cstring(s: &str, context: &str) -> Result<CString, String> {
     // 移除 null 字节
     let safe_str = s.replace('\0', "");
-    CString::new(safe_str).map_err(|e| {
-        format!("Failed to create CString for {}: {}", context, e)
-    })
+    CString::new(safe_str).map_err(|e| format!("Failed to create CString for {}: {}", context, e))
 }
 
 // 验证 HTTP header name 是否合法 (RFC 7230 token)
@@ -34,16 +32,20 @@ fn is_valid_header_name(name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
-    name.bytes().all(|b| matches!(b,
-        b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' |
-        b'^' | b'_' | b'`' | b'|' | b'~' |
-        b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
-    ))
+    name.bytes().all(|b| {
+        matches!(b,
+            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' |
+            b'^' | b'_' | b'`' | b'|' | b'~' |
+            b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
+        )
+    })
 }
 
 // 验证 HTTP header value 是否合法（不含控制字符，除了水平制表符）
 fn is_valid_header_value(value: &str) -> bool {
-    value.bytes().all(|b| b == b'\t' || (b >= 0x20 && b != 0x7f))
+    value
+        .bytes()
+        .all(|b| b == b'\t' || (b >= 0x20 && b != 0x7f))
 }
 
 // -----------------------------------------------------------------------------
@@ -94,7 +96,8 @@ impl CronetEngine {
 
             // Enable Cookie Store to handle Set-Cookie in 302 redirects
             let experimental_options = r#"{"enable_cookie_store":true}"#;
-            let c_options = CString::new(experimental_options).expect("Invalid experimental options");
+            let c_options =
+                CString::new(experimental_options).expect("Invalid experimental options");
             Cronet_EngineParams_experimental_options_set(params_ptr, c_options.as_ptr());
 
             // Start the engine
@@ -142,7 +145,8 @@ impl CronetEngine {
 
             // Enable Cookie Store to handle Set-Cookie in 302 redirects
             let experimental_options = r#"{"enable_cookie_store":true}"#;
-            let c_options = CString::new(experimental_options).expect("Invalid experimental options");
+            let c_options =
+                CString::new(experimental_options).expect("Invalid experimental options");
             Cronet_EngineParams_experimental_options_set(params, c_options.as_ptr());
 
             Cronet_Engine_StartWithParams(engine, params);
@@ -168,7 +172,8 @@ impl CronetEngine {
             let engine_ptr = if needs_custom_engine {
                 // Build proxy rules string if proxy is configured
                 let proxy_rules = if let Some(proxy) = &config.proxy {
-                    let scheme = match ProxyType::try_from(proxy.r#type).unwrap_or(ProxyType::Http) {
+                    let scheme = match ProxyType::try_from(proxy.r#type).unwrap_or(ProxyType::Http)
+                    {
                         ProxyType::Http => "http",
                         ProxyType::Https => "https",
                         ProxyType::Socks5 => "socks5",
@@ -213,8 +218,8 @@ impl CronetEngine {
                 response_headers: Mutex::new(Vec::new()),
                 status_code: AtomicI32::new(0),
                 completed: completed.clone(),
-                active_requests: None,  // CronetEngine 不使用活跃请求计数
-                allow_redirects: true,  // 默认允许重定向（REST API）
+                active_requests: None, // CronetEngine 不使用活跃请求计数
+                allow_redirects: true, // 默认允许重定向（REST API）
                 redirect_response: Mutex::new(None),
                 context_taken: AtomicBool::new(false),
                 is_streaming: false,
@@ -224,7 +229,7 @@ impl CronetEngine {
 
             // 复用引擎共享的 executor 线程（避免每个请求创建新线程）
             let executor_context = Box::new(ExecutorContext {
-                in_flight_executors: None,  // CronetEngine 不使用 in-flight 计数
+                in_flight_executors: None, // CronetEngine 不使用 in-flight 计数
             });
             let executor_context_ptr = Box::into_raw(executor_context);
 
@@ -253,8 +258,7 @@ impl CronetEngine {
 
             // Set highest priority to get HTTP/2 weight=256 (same as normal browsers)
             Cronet_UrlRequestParams_priority_set(
-                params_ptr,
-                4  // REQUEST_PRIORITY_HIGHEST
+                params_ptr, 4, // REQUEST_PRIORITY_HIGHEST
             );
 
             let c_url = CString::new(target.url.as_str()).unwrap();
@@ -262,11 +266,17 @@ impl CronetEngine {
             // Headers - 按顺序添加（跳过无效的 header name/value）
             for header in &target.headers {
                 if !is_valid_header_name(&header.name) {
-                    eprintln!("[WARN] Skipping header with invalid name: {:?}", header.name);
+                    eprintln!(
+                        "[WARN] Skipping header with invalid name: {:?}",
+                        header.name
+                    );
                     continue;
                 }
                 if !is_valid_header_value(&header.value) {
-                    eprintln!("[WARN] Skipping header with invalid value for key {:?}", header.name);
+                    eprintln!(
+                        "[WARN] Skipping header with invalid value for key {:?}",
+                        header.name
+                    );
                     continue;
                 }
                 let c_key = CString::new(header.name.as_str()).unwrap();
@@ -409,11 +419,11 @@ pub struct CronetRequest {
     ptr: Cronet_UrlRequestPtr,
     callback_ptr: Cronet_UrlRequestCallbackPtr,
     executor_ptr: Cronet_ExecutorPtr,
-    executor_context_ptr: *mut ExecutorContext,  // Executor 的独立 context
+    executor_context_ptr: *mut ExecutorContext, // Executor 的独立 context
     owned_engine_ptr: Option<Cronet_EnginePtr>,
     upload_data_provider_ptr: Option<Cronet_UploadDataProviderPtr>,
     upload_body_data: Option<Vec<u8>>, // Owns the body data so pointers are valid
-    completed: Arc<AtomicBool>,  // 标记请求是否完成，由回调设置
+    completed: Arc<AtomicBool>,        // 标记请求是否完成，由回调设置
 }
 
 unsafe impl Send for CronetRequest {}
@@ -479,11 +489,11 @@ struct RequestContext {
     response_buffer: Mutex<Vec<u8>>,
     response_headers: Mutex<Vec<(String, String)>>,
     status_code: AtomicI32,
-    completed: Arc<AtomicBool>,  // 标记请求是否完成
-    active_requests: Option<Arc<AtomicUsize>>,  // Session 的活跃请求计数器
-    allow_redirects: bool,  // 是否允许重定向（只读，不需要锁）
-    redirect_response: Mutex<Option<RequestResult>>,  // 存储重定向响应（当 allow_redirects=false 时）
-    context_taken: AtomicBool,  // 防止双重释放：标记 context 是否已被取走
+    completed: Arc<AtomicBool>,                      // 标记请求是否完成
+    active_requests: Option<Arc<AtomicUsize>>,       // Session 的活跃请求计数器
+    allow_redirects: bool,                           // 是否允许重定向（只读，不需要锁）
+    redirect_response: Mutex<Option<RequestResult>>, // 存储重定向响应（当 allow_redirects=false 时）
+    context_taken: AtomicBool,                       // 防止双重释放：标记 context 是否已被取走
     // 流式响应
     is_streaming: bool,
     stream_tx: Mutex<Option<mpsc::UnboundedSender<StreamChunk>>>,
@@ -540,7 +550,9 @@ unsafe extern "C" fn on_redirect_received(
                 response_headers.extend(headers);
             }
             Err(poisoned) => {
-                eprintln!("[WARN] on_redirect_received: response_headers mutex poisoned, recovering");
+                eprintln!(
+                    "[WARN] on_redirect_received: response_headers mutex poisoned, recovering"
+                );
                 let mut response_headers = poisoned.into_inner();
                 response_headers.extend(headers);
             }
@@ -629,13 +641,18 @@ unsafe extern "C" fn on_response_started(
         let headers = match context.response_headers.lock() {
             Ok(guard) => guard.clone(),
             Err(poisoned) => {
-                eprintln!("[WARN] on_response_started: response_headers mutex poisoned for streaming");
+                eprintln!(
+                    "[WARN] on_response_started: response_headers mutex poisoned for streaming"
+                );
                 poisoned.into_inner().clone()
             }
         };
         if let Ok(guard) = context.stream_tx.lock() {
             if let Some(ref tx) = *guard {
-                let _ = tx.send(StreamChunk::Headers { status_code, headers });
+                let _ = tx.send(StreamChunk::Headers {
+                    status_code,
+                    headers,
+                });
             }
         }
     }
@@ -772,7 +789,10 @@ unsafe extern "C" fn on_canceled(
     };
 
     if let Some(redirect_response) = redirect_response {
-        verbose_log!("[DEBUG] on_canceled: Sending redirect response (status {})", redirect_response.status_code);
+        verbose_log!(
+            "[DEBUG] on_canceled: Sending redirect response (status {})",
+            redirect_response.status_code
+        );
         let tx = match context.tx.lock() {
             Ok(mut guard) => guard.take(),
             Err(poisoned) => {
@@ -830,8 +850,12 @@ unsafe fn complete_request(callback_ptr: Cronet_UrlRequestCallbackPtr, result: R
         };
         if let Some(tx) = stream_tx {
             match result {
-                Ok(_) => { let _ = tx.send(StreamChunk::Done); }
-                Err(e) => { let _ = tx.send(StreamChunk::Error(e)); }
+                Ok(_) => {
+                    let _ = tx.send(StreamChunk::Done);
+                }
+                Err(e) => {
+                    let _ = tx.send(StreamChunk::Error(e));
+                }
             }
         }
         return;
@@ -853,7 +877,9 @@ unsafe fn complete_request(callback_ptr: Cronet_UrlRequestCallbackPtr, result: R
                 let headers = match context.response_headers.lock() {
                     Ok(guard) => guard.clone(),
                     Err(poisoned) => {
-                        eprintln!("[WARN] complete_request: response_headers mutex poisoned, recovering");
+                        eprintln!(
+                            "[WARN] complete_request: response_headers mutex poisoned, recovering"
+                        );
                         poisoned.into_inner().clone()
                     }
                 };
@@ -861,7 +887,9 @@ unsafe fn complete_request(callback_ptr: Cronet_UrlRequestCallbackPtr, result: R
                 let body = match context.response_buffer.lock() {
                     Ok(guard) => guard.clone(),
                     Err(poisoned) => {
-                        eprintln!("[WARN] complete_request: response_buffer mutex poisoned, recovering");
+                        eprintln!(
+                            "[WARN] complete_request: response_buffer mutex poisoned, recovering"
+                        );
                         poisoned.into_inner().clone()
                     }
                 };
@@ -951,6 +979,8 @@ pub struct SessionConfig {
     pub proxy_rules: Option<String>,
     pub skip_cert_verify: bool,
     pub timeout_ms: u64,
+    pub user_agent: Option<String>,
+    pub accept_language: Option<String>,
     pub cipher_suites: Option<Vec<String>>,
     pub tls_curves: Option<Vec<String>>,
     pub tls_extensions: Option<Vec<String>>,
@@ -964,9 +994,9 @@ pub struct Session {
     engine_ptr: Cronet_EnginePtr,
     pub config: SessionConfig,
     pub created_at: Instant,
-    active_requests: Arc<AtomicUsize>,  // 追踪活跃请求数量（仅用于监控）
-    in_flight_executors: Arc<AtomicUsize>,  // 追踪正在执行的 executor 回调数量
-    is_closed: Arc<AtomicBool>,  // 标记 session 是否已关闭
+    active_requests: Arc<AtomicUsize>, // 追踪活跃请求数量（仅用于监控）
+    in_flight_executors: Arc<AtomicUsize>, // 追踪正在执行的 executor 回调数量
+    is_closed: Arc<AtomicBool>,        // 标记 session 是否已关闭
 }
 
 unsafe impl Send for Session {}
@@ -986,7 +1016,10 @@ impl Drop for Session {
                 verbose_log!("[DEBUG] Session::drop - active_requests={}", active);
 
                 if active > 0 {
-                    verbose_log!("[DEBUG] Session::drop - Waiting for {} active requests to complete", active);
+                    verbose_log!(
+                        "[DEBUG] Session::drop - Waiting for {} active requests to complete",
+                        active
+                    );
                     let start = std::time::Instant::now();
                     while self.active_requests.load(Ordering::Acquire) > 0 {
                         if start.elapsed() > std::time::Duration::from_secs(30) {
@@ -1039,6 +1072,17 @@ impl SessionManager {
                 Cronet_EngineParams_proxy_rules_set(params, c_rules.as_ptr());
             }
 
+            if let Some(ref user_agent) = config.user_agent {
+                let c_user_agent = CString::new(user_agent.as_str()).expect("Invalid user agent");
+                Cronet_EngineParams_user_agent_set(params, c_user_agent.as_ptr());
+            }
+
+            if let Some(ref accept_language) = config.accept_language {
+                let c_accept_language =
+                    CString::new(accept_language.as_str()).expect("Invalid accept language");
+                Cronet_EngineParams_accept_language_set(params, c_accept_language.as_ptr());
+            }
+
             Cronet_EngineParams_enable_quic_set(params, true);
             Cronet_EngineParams_enable_http2_set(params, true);
             Cronet_EngineParams_enable_brotli_set(params, true);
@@ -1055,10 +1099,8 @@ impl SessionManager {
 
             if let Some(ref cipher_suites) = config.cipher_suites {
                 if !cipher_suites.is_empty() {
-                    let cipher_suites_json: Vec<String> = cipher_suites
-                        .iter()
-                        .map(|s| format!("\"{}\"", s))
-                        .collect();
+                    let cipher_suites_json: Vec<String> =
+                        cipher_suites.iter().map(|s| format!("\"{}\"", s)).collect();
                     options_parts.push(format!(
                         "\"tls_cipher_suites\":[{}]",
                         cipher_suites_json.join(",")
@@ -1068,14 +1110,9 @@ impl SessionManager {
 
             if let Some(ref tls_curves) = config.tls_curves {
                 if !tls_curves.is_empty() {
-                    let tls_curves_json: Vec<String> = tls_curves
-                        .iter()
-                        .map(|s| format!("\"{}\"", s))
-                        .collect();
-                    options_parts.push(format!(
-                        "\"tls_curves\":[{}]",
-                        tls_curves_json.join(",")
-                    ));
+                    let tls_curves_json: Vec<String> =
+                        tls_curves.iter().map(|s| format!("\"{}\"", s)).collect();
+                    options_parts.push(format!("\"tls_curves\":[{}]", tls_curves_json.join(",")));
                 }
             }
 
@@ -1108,8 +1145,12 @@ impl SessionManager {
             // Always set experimental_options (at least for enable_cookie_store)
             if !options_parts.is_empty() {
                 let experimental_options = format!("{{{}}}", options_parts.join(","));
-                verbose_log!("[DEBUG] Setting experimental options: {}", experimental_options);
-                let c_options = CString::new(experimental_options).expect("Invalid experimental options");
+                verbose_log!(
+                    "[DEBUG] Setting experimental options: {}",
+                    experimental_options
+                );
+                let c_options =
+                    CString::new(experimental_options).expect("Invalid experimental options");
                 Cronet_EngineParams_experimental_options_set(params, c_options.as_ptr());
             }
 
@@ -1159,7 +1200,11 @@ impl SessionManager {
         session_id: &str,
         target: &crate::cronet_pb::TargetRequest,
         allow_redirects: bool,
-    ) -> Option<(CronetRequest, oneshot::Receiver<Result<RequestResult, String>>, u64)> {
+    ) -> Option<(
+        CronetRequest,
+        oneshot::Receiver<Result<RequestResult, String>>,
+        u64,
+    )> {
         let sessions = match self.sessions.read() {
             Ok(guard) => guard,
             Err(poisoned) => {
@@ -1179,8 +1224,12 @@ impl SessionManager {
         session.active_requests.fetch_add(1, Ordering::Acquire);
         let current_active = session.active_requests.load(Ordering::Acquire);
 
-        verbose_log!("[DEBUG] Using session {} to send request to {} (active: {})",
-            session_id, target.url, current_active);
+        verbose_log!(
+            "[DEBUG] Using session {} to send request to {} (active: {})",
+            session_id,
+            target.url,
+            current_active
+        );
 
         let (request, rx) = Self::start_request_with_engine(
             session.engine_ptr,
@@ -1202,7 +1251,10 @@ impl SessionManager {
         in_flight_executors: Option<Arc<AtomicUsize>>,
         allow_redirects: bool,
         stream_sender: Option<mpsc::UnboundedSender<StreamChunk>>,
-    ) -> (CronetRequest, oneshot::Receiver<Result<RequestResult, String>>) {
+    ) -> (
+        CronetRequest,
+        oneshot::Receiver<Result<RequestResult, String>>,
+    ) {
         unsafe {
             let (tx, rx) = oneshot::channel();
 
@@ -1255,8 +1307,7 @@ impl SessionManager {
 
             // Set highest priority to get HTTP/2 weight=256 (same as normal browsers)
             Cronet_UrlRequestParams_priority_set(
-                params_ptr,
-                4  // REQUEST_PRIORITY_HIGHEST
+                params_ptr, 4, // REQUEST_PRIORITY_HIGHEST
             );
 
             let c_url = CString::new(target.url.as_str()).unwrap();
@@ -1264,11 +1315,17 @@ impl SessionManager {
             // Headers - 按顺序添加（跳过无效的 header name/value）
             for header in &target.headers {
                 if !is_valid_header_name(&header.name) {
-                    eprintln!("[WARN] Skipping header with invalid name: {:?}", header.name);
+                    eprintln!(
+                        "[WARN] Skipping header with invalid name: {:?}",
+                        header.name
+                    );
                     continue;
                 }
                 if !is_valid_header_value(&header.value) {
-                    eprintln!("[WARN] Skipping header with invalid value for key {:?}", header.name);
+                    eprintln!(
+                        "[WARN] Skipping header with invalid value for key {:?}",
+                        header.name
+                    );
                     continue;
                 }
                 let c_key = CString::new(header.name.as_str()).unwrap();
@@ -1361,7 +1418,10 @@ impl SessionManager {
         let session = sessions.get(session_id)?;
 
         if session.is_closed.load(Ordering::Acquire) {
-            eprintln!("[WARN] Session {} is closed, rejecting stream request", session_id);
+            eprintln!(
+                "[WARN] Session {} is closed, rejecting stream request",
+                session_id
+            );
             return None;
         }
 
@@ -1410,7 +1470,11 @@ impl SessionManager {
 
     /// 获取 session 的 engine_ptr（供 WebSocket 使用）
     pub fn get_engine_ptr(&self, session_id: &str) -> Option<Cronet_EnginePtr> {
-        self.sessions.read().ok()?.get(session_id).map(|s| s.engine_ptr)
+        self.sessions
+            .read()
+            .ok()?
+            .get(session_id)
+            .map(|s| s.engine_ptr)
     }
 }
 
@@ -1421,10 +1485,22 @@ impl SessionManager {
 /// WebSocket 事件
 #[derive(Debug, Clone)]
 pub enum WebSocketEvent {
-    Open { protocol: String },
-    Message { is_text: bool, data: Vec<u8> },
-    Close { was_clean: bool, code: u16, reason: String },
-    Error { net_error: i32, message: String },
+    Open {
+        protocol: String,
+    },
+    Message {
+        is_text: bool,
+        data: Vec<u8>,
+    },
+    Close {
+        was_clean: bool,
+        code: u16,
+        reason: String,
+    },
+    Error {
+        net_error: i32,
+        message: String,
+    },
 }
 
 /// 内部状态，通过 user_data 指针传递给 C 回调
@@ -1523,9 +1599,7 @@ impl CronetWebSocket {
             on_error: Some(ws_on_error),
         };
 
-        let ws_ptr = unsafe {
-            Cronet_WebSocket_Create(engine_ptr, &callbacks, state_ptr)
-        };
+        let ws_ptr = unsafe { Cronet_WebSocket_Create(engine_ptr, &callbacks, state_ptr) };
         if ws_ptr.is_null() {
             return Err("Failed to create WebSocket".to_string());
         }
@@ -1545,9 +1619,13 @@ impl CronetWebSocket {
         extra_headers: Option<&str>,
     ) -> Result<(), String> {
         let c_url = safe_cstring(url, "ws_url")?;
-        let c_protos = sub_protocols.map(|s| safe_cstring(s, "ws_sub_protocols")).transpose()?;
+        let c_protos = sub_protocols
+            .map(|s| safe_cstring(s, "ws_sub_protocols"))
+            .transpose()?;
         let c_origin = origin.map(|s| safe_cstring(s, "ws_origin")).transpose()?;
-        let c_extra_headers = extra_headers.map(|s| safe_cstring(s, "ws_extra_headers")).transpose()?;
+        let c_extra_headers = extra_headers
+            .map(|s| safe_cstring(s, "ws_extra_headers"))
+            .transpose()?;
 
         let ret = unsafe {
             Cronet_WebSocket_Connect(
@@ -1596,9 +1674,7 @@ impl CronetWebSocket {
 
     pub fn close(&self, code: u16, reason: &str) -> Result<(), String> {
         let c_reason = safe_cstring(reason, "ws_close_reason")?;
-        let ret = unsafe {
-            Cronet_WebSocket_Close(self.ws_ptr, code, c_reason.as_ptr())
-        };
+        let ret = unsafe { Cronet_WebSocket_Close(self.ws_ptr, code, c_reason.as_ptr()) };
         if ret != 0 {
             return Err(format!("WebSocket close failed: {}", ret));
         }

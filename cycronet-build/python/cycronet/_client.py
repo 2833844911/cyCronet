@@ -143,6 +143,16 @@ def _extract_base_url_host(base_url: Optional[str]) -> str:
     return host
 
 
+def _header_value(headers: Optional[Dict[str, str]], name: str) -> Optional[str]:
+    if not headers:
+        return None
+    wanted = name.lower()
+    for header_name, value in headers.items():
+        if header_name.lower() == wanted:
+            return value
+    return None
+
+
 def _create_session_with_tls_profile(
     client,
     proxy_rules,
@@ -152,6 +162,8 @@ def _create_session_with_tls_profile(
     tls_curves,
     tls_extensions,
     signature_algorithms,
+    user_agent,
+    accept_language,
 ):
     try:
         return client.create_session(
@@ -162,21 +174,34 @@ def _create_session_with_tls_profile(
             tls_curves,
             tls_extensions,
             signature_algorithms,
+            user_agent,
+            accept_language,
         )
     except TypeError as exc:
-        if signature_algorithms:
-            raise RequestError(
-                "signature_algorithms requires a cycronet native extension "
-                "rebuilt with tls_signature_algorithms support"
-            ) from exc
-        return client.create_session(
-            proxy_rules,
-            skip_cert_verify,
-            timeout_ms,
-            cipher_suites,
-            tls_curves,
-            tls_extensions,
-        )
+        try:
+            return client.create_session(
+                proxy_rules,
+                skip_cert_verify,
+                timeout_ms,
+                cipher_suites,
+                tls_curves,
+                tls_extensions,
+                signature_algorithms,
+            )
+        except TypeError:
+            if signature_algorithms:
+                raise RequestError(
+                    "signature_algorithms requires a cycronet native extension "
+                    "rebuilt with tls_signature_algorithms support"
+                ) from exc
+            return client.create_session(
+                proxy_rules,
+                skip_cert_verify,
+                timeout_ms,
+                cipher_suites,
+                tls_curves,
+                tls_extensions,
+            )
 
 
 def _validate_proxy_url(proxy_url: str) -> None:
@@ -242,7 +267,7 @@ def CronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_150",
+    chrometls: Optional[str] = "chrome_152",
     headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
     default_domain: Optional[str] = None
@@ -254,7 +279,7 @@ def CronetClient(
         verify: Whether to verify SSL certificates (False to skip verification)
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
-        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
+        chrometls: TLS fingerprint configuration name (e.g. "chrome_152")
         headers: Default headers for all requests in this session
         base_url: Optional base URL; its host is used as the default cookie
             domain when *default_domain* is not set.
@@ -269,7 +294,7 @@ def CronetClient(
     Example:
         session = CronetClient(verify=False)
         session = CronetClient(proxies={"https": "http://127.0.0.1:8080"})
-        session = CronetClient(verify=False, chrometls="chrome_150")
+        session = CronetClient(verify=False, chrometls="chrome_152")
         session = CronetClient(headers={"User-Agent": "MyApp/1.0"})
         response = session.get("https://example.com")
     """
@@ -298,6 +323,8 @@ def CronetClient(
     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
     signature_algorithms = tls_profile.get("signature_algorithms", []) if tls_profile else None
+    user_agent = _header_value(headers, "user-agent")
+    accept_language = _header_value(headers, "accept-language")
 
     client = PyCronetClient()
     session_id = _create_session_with_tls_profile(
@@ -308,7 +335,9 @@ def CronetClient(
         cipher_suites,
         tls_curves,
         tls_extensions,
-        signature_algorithms
+        signature_algorithms,
+        user_agent,
+        accept_language,
     )
 
     # Create a wrapped Session, save client reference
@@ -326,7 +355,7 @@ def AsyncCronetClient(
     verify: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     timeout_ms: int = 30000,
-    chrometls: Optional[str] = "chrome_150",
+    chrometls: Optional[str] = "chrome_152",
     headers: Optional[Dict[str, str]] = None,
     base_url: Optional[str] = None,
     default_domain: Optional[str] = None
@@ -338,7 +367,7 @@ def AsyncCronetClient(
         verify: Whether to verify SSL certificates (False to skip verification)
         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
         timeout_ms: Timeout in milliseconds
-        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
+        chrometls: TLS fingerprint configuration name (e.g. "chrome_152")
         headers: Default headers for all requests in this session
         base_url: Optional base URL; its host is used as the default cookie
             domain when *default_domain* is not set.
@@ -378,6 +407,8 @@ def AsyncCronetClient(
     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
     signature_algorithms = tls_profile.get("signature_algorithms", []) if tls_profile else None
+    user_agent = _header_value(headers, "user-agent")
+    accept_language = _header_value(headers, "accept-language")
 
     client = PyCronetClient()
     session_id = _create_session_with_tls_profile(
@@ -388,7 +419,9 @@ def AsyncCronetClient(
         cipher_suites,
         tls_curves,
         tls_extensions,
-        signature_algorithms
+        signature_algorithms,
+        user_agent,
+        accept_language,
     )
 
     class _ClientWrapper:

@@ -1,0 +1,26 @@
+From dd597fc64b31cad3758c3f584f42d97ee3121b19 Mon Sep 17 00:00:00 2001
+From: chenkaipeng <2833844911@qq.com>
+Date: Sat, 9 May 2026 03:33:33 +0800
+Subject: [PATCH 4/4] cronet: enable websockets in cronet build (force
+ enable_websockets=true)
+
+---
+ net/features.gni | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/net/features.gni b/net/features.gni
+index 58807c2250..ebd5e4fb32 100644
+--- a/net/features.gni
++++ b/net/features.gni
+@@ -14,7 +14,7 @@ declare_args() {
+ 
+   # WebSockets and socket stream code are not used when: either, blink is not
+   # used; or, Cronet is being built.
+-  enable_websockets = use_blink && !is_cronet_build
++  enable_websockets = true
+ 
+   # Enable Kerberos authentication. It is disabled by default on iOS, Fuchsia
+   # and Chromecast, at least for now. This feature needs configuration
+-- 
+2.50.1 (Apple Git-155)
+

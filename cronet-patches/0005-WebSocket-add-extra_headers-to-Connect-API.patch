@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: chenkaipeng <2833844911@qq.com>
+Date: Sat, 10 May 2026 20:50:00 +0800
+Subject: [PATCH 5/5] WebSocket: add extra_headers to Connect API, remove
+ Pragma/Cache-Control defaults
+
+1. Add |extra_headers| parameter to Cronet_WebSocket_Connect() so
+   callers can inject custom HTTP headers into the WebSocket upgrade
+   request in the exact order specified.
+
+   Format: "\r\n"-delimited "Name: Value" pairs, e.g.
+     "User-Agent: MyApp\r\nAccept-Language: zh-CN\r\n"
+
+2. Remove LOAD_BYPASS_CACHE from WebSocket load flags to prevent
+   Chromium from automatically adding Pragma: no-cache and
+   Cache-Control: no-cache headers, matching real Chrome behavior.
+
+---
+ components/cronet/native/cronet_websocket.cc      | 47 +++++++++++++++++-----
+ components/cronet/native/cronet_websocket.h       |  8 +++-
+ .../native/include/cronet_websocket_c.h           |  7 +++-
+ net/websockets/websocket_stream.cc                |  2 +-
+ 4 files changed, 50 insertions(+), 14 deletions(-)
+
+diff --git a/components/cronet/native/cronet_websocket.cc b/components/cronet/native/cronet_websocket.cc
+index 2e796623f6..d6098b6654 100644
+--- a/components/cronet/native/cronet_websocket.cc
++++ b/components/cronet/native/cronet_websocket.cc
+@@ -154,7 +154,8 @@ CronetWebSocket::~CronetWebSocket() = default;
+ 
+ int CronetWebSocket::Connect(const std::string& url,
+                               const std::string& sub_protocols,
+-                              const std::string& origin) {
++                              const std::string& origin,
++                              const std::string& extra_headers_str) {
+   GURL gurl(url);
+   if (!gurl.is_valid() || (!gurl.SchemeIs("ws") && !gurl.SchemeIs("wss"))) {
+     return net::ERR_INVALID_URL;
+@@ -167,6 +168,25 @@ int CronetWebSocket::Connect(const std::string& url,
+                                   base::SPLIT_WANT_NONEMPTY);
+   }
+ 
++  // Parse extra headers: "\r\n"-delimited "Name: Value" pairs.
++  net::HttpRequestHeaders extra_headers;
++  if (!extra_headers_str.empty()) {
++    std::vector<std::string> lines = base::SplitString(
++        extra_headers_str, "\r\n",
++        base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++    for (const auto& line : lines) {
++      size_t colon_pos = line.find(':');
++      if (colon_pos != std::string::npos && colon_pos > 0) {
++        std::string name = line.substr(0, colon_pos);
++        std::string value = line.substr(colon_pos + 1);
++        // Trim leading whitespace from value.
++        size_t start = value.find_first_not_of(" \t");
++        if (start != std::string::npos) value = value.substr(start);
++        extra_headers.SetHeader(name, value);
++      }
++    }
++  }
++
+   CronetContext* context = engine_->cronet_url_request_context();
+   if (!context) {
+     return net::ERR_FAILED;
+@@ -175,13 +195,14 @@ int CronetWebSocket::Connect(const std::string& url,
+   context->PostTaskToNetworkThread(
+       FROM_HERE,
+       base::BindOnce(&CronetWebSocket::DoConnect, base::Unretained(this),
+-                     url, protocols, origin));
++                     url, protocols, origin, std::move(extra_headers)));
+   return net::OK;
+ }
+ 
+ void CronetWebSocket::DoConnect(const std::string& url,
+                                 const std::vector<std::string>& protocols,
+-                                const std::string& origin) {
++                                const std::string& origin,
++                                net::HttpRequestHeaders extra_headers) {
+   CronetContext* context = engine_->cronet_url_request_context();
+   net::URLRequestContext* url_request_context =
+       context->GetURLRequestContext();
+@@ -200,13 +221,11 @@ void CronetWebSocket::DoConnect(const std::string& url,
+   net::SiteForCookies site_for_cookies =
+       net::SiteForCookies::FromOrigin(ws_origin);
+ 
+-  net::HttpRequestHeaders headers;
+-
+   channel_->SendAddChannelRequest(
+       gurl, protocols, ws_origin, site_for_cookies,
+       net::StorageAccessApiStatus::kNone,
+       net::IsolationInfo::CreateTransient(std::nullopt),
+-      headers, kTrafficAnnotation);
++      extra_headers, kTrafficAnnotation);
+ 
+   base::AutoLock lock(lock_);
+   connected_ = true;
+@@ -410,14 +429,16 @@ Cronet_WebSocket_Create(Cronet_EnginePtr engine,
+ int Cronet_WebSocket_Connect(Cronet_WebSocketPtr ws,
+                              const char* url,
+                              const char* sub_protocols,
+-                             const char* origin) {
++                             const char* origin,
++                             const char* extra_headers) {
+   if (!ws || !url) {
+     return -1;
+   }
+   auto* impl = reinterpret_cast<cronet::CronetWebSocket*>(ws);
+   return impl->Connect(url,
+                        sub_protocols ? sub_protocols : "",
+-                       origin ? origin : "");
++                       origin ? origin : "",
++                       extra_headers ? extra_headers : "");
+ }
+ 
+ int Cronet_WebSocket_Send(Cronet_WebSocketPtr ws,
+diff --git a/components/cronet/native/cronet_websocket.h b/components/cronet/native/cronet_websocket.h
+index aa1e023f59..1fd2f63029 100644
+--- a/components/cronet/native/cronet_websocket.h
++++ b/components/cronet/native/cronet_websocket.h
+@@ -15,6 +15,7 @@
+ #include "base/synchronization/lock.h"
+ #include "base/synchronization/waitable_event.h"
+ #include "components/cronet/native/include/cronet_websocket_c.h"
++#include "net/http/http_request_headers.h"
+ #include "net/websockets/websocket_event_interface.h"
+ 
+ namespace net {
+@@ -91,7 +92,8 @@ class CronetWebSocket {
+ 
+   int Connect(const std::string& url,
+               const std::string& sub_protocols,
+-              const std::string& origin);
++              const std::string& origin,
++              const std::string& extra_headers);
+   int Send(Cronet_WebSocket_MessageType type,
+            const void* data, uint64_t len);
+   int Close(uint16_t code, const std::string& reason);
+@@ -109,7 +111,8 @@ class CronetWebSocket {
+  private:
+   void DoConnect(const std::string& url,
+                  const std::vector<std::string>& protocols,
+-                 const std::string& origin);
++                 const std::string& origin,
++                 net::HttpRequestHeaders extra_headers);
+   void DoDestroy();
+ 
+   raw_ptr<Cronet_EngineImpl> engine_;
+diff --git a/components/cronet/native/include/cronet_websocket_c.h b/components/cronet/native/include/cronet_websocket_c.h
+index f20332455b..1f97012581 100644
+--- a/components/cronet/native/include/cronet_websocket_c.h
++++ b/components/cronet/native/include/cronet_websocket_c.h
+@@ -55,12 +55,16 @@ Cronet_WebSocket_Create(Cronet_EnginePtr engine,
+ // Connect to |url| (ws:// or wss://).
+ // |sub_protocols| is comma-separated list (may be NULL).
+ // |origin| is the Origin header (may be NULL).
++// |extra_headers| is "\r\n"-delimited "Name: Value" pairs (may be NULL).
++//   These headers are added to the HTTP upgrade request in order.
++//   Example: "User-Agent: MyApp\r\nAccept-Language: zh-CN\r\n"
+ // Returns 0 on success, negative on error.
+ CRONET_EXPORT int
+ Cronet_WebSocket_Connect(Cronet_WebSocketPtr ws,
+                          const char* url,
+                          const char* sub_protocols,
+-                         const char* origin);
++                         const char* origin,
++                         const char* extra_headers);
+ 
+ // Send a message. Returns 0 on success, negative on error.
+ CRONET_EXPORT int
+diff --git a/net/websockets/websocket_stream.cc b/net/websockets/websocket_stream.cc
+index b7fc307c7b..0326445050 100644
+--- a/net/websockets/websocket_stream.cc
++++ b/net/websockets/websocket_stream.cc
+@@ -158,7 +158,7 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
+         connect_delegate_.get(), requested_subprotocols, this);
+     url_request_->SetUserData(kWebSocketHandshakeUserDataKey,
+                               std::move(create_helper));
+-    url_request_->SetLoadFlags(LOAD_DISABLE_CACHE | LOAD_BYPASS_CACHE);
++    url_request_->SetLoadFlags(LOAD_DISABLE_CACHE);
+     connect_delegate_->OnCreateRequest(url_request_.get());
+   }
+ 

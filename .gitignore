@@ -15,3 +15,9 @@ cycronet-build/export_150_1_0_tls_signature.zip
 cycronet-build/export_150_1_0_tls_signature/.DS_Store
 cycronet-build/export_150_1_0_tls_signature/artifacts/*.whl
 cycronet-build/export_150_1_0_tls_signature/artifacts/*.dylib
+
+cycronet-build/export_152_0_1_tls_signature/.DS_Store
+cycronet-build/export_152_0_1_tls_signature/artifacts/*.whl
+cycronet-build/export_152_0_1_tls_signature/artifacts/*.dylib
+
+cycronet-build/__pycache__/

@@ -242,6 +242,8 @@ pub unsafe extern "C" fn cycronet_session_create(
             proxy_rules: None,
             skip_cert_verify: false,
             timeout_ms: 30000,
+            user_agent: None,
+            accept_language: None,
             cipher_suites: None,
             tls_curves: None,
             tls_extensions: None,
@@ -257,6 +259,8 @@ pub unsafe extern "C" fn cycronet_session_create(
             } else {
                 c.timeout_ms
             },
+            user_agent: None,
+            accept_language: None,
             cipher_suites: c_str_array(c.cipher_suites, c.cipher_suites_count),
             tls_curves: c_str_array(c.tls_curves, c.tls_curves_count),
             tls_extensions: c_str_array(c.tls_extensions, c.tls_extensions_count),

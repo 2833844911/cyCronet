@@ -1,0 +1,2198 @@
+From 5b1a12f8ef9ceb34bd15c1113947d43e9b06f9c4 Mon Sep 17 00:00:00 2001
+From: chenkaipeng <2833844911@qq.com>
+Date: Fri, 8 May 2026 22:40:19 +0800
+Subject: [PATCH 1/4] cronet: socks5 auth + proxy delegate + ssl fingerprint
+ (before websocket changes)
+
+---
+ BUILD.gn                                      |   4 +-
+ base/BUILD.gn                                 |   6 +-
+ components/cronet/BUILD.gn                    |   6 +
+ components/cronet/cronet_context.cc           |  32 +++
+ .../cronet/cronet_global_state_stubs.cc       |   6 +
+ components/cronet/cronet_proxy_delegate.cc    |  94 ++++++--
+ components/cronet/cronet_proxy_delegate.h     |   9 +
+ .../cronet/cronet_ssl_config_service.cc       | 119 ++++++++++
+ components/cronet/cronet_ssl_config_service.h |  41 ++++
+ components/cronet/cronet_url_request.cc       |  24 ++-
+ components/cronet/native/cronet.idl           |  17 ++
+ components/cronet/native/engine.cc            | 203 +++++++++++++++++-
+ .../cronet/native/generated/cronet.idl_c.h    |  12 ++
+ .../generated/cronet.idl_impl_struct.cc       |  24 +++
+ .../native/generated/cronet.idl_impl_struct.h |   2 +
+ .../cronet/native/include/cronet_tls_config.h |  48 +++++
+ components/cronet/native/url_request.cc       |   2 -
+ .../cronet/proto/request_context_config.proto |   4 +
+ components/cronet/tls_cipher_suite_mapper.cc  |  98 +++++++++
+ components/cronet/tls_cipher_suite_mapper.h   |  30 +++
+ components/cronet/tls_curve_mapper.cc         |  86 ++++++++
+ components/cronet/tls_curve_mapper.h          |  32 +++
+ .../cronet/url_request_context_config.cc      |  46 +++-
+ .../cronet/url_request_context_config.h       |  17 ++
+ .../url_request_context_config_unittest.cc    |   9 +
+ net/BUILD.gn                                  |   6 +-
+ net/base/proxy_delegate.cc                    |   6 +
+ net/base/proxy_delegate.h                     |   8 +
+ net/cert/ev_root_ca_metadata.cc               |   4 -
+ net/cert/internal/system_trust_store.cc       |   8 +
+ net/http/http_request_headers.cc              |  10 +
+ net/http/http_request_headers.h               |   6 +
+ net/socket/connect_job_params_factory.cc      |  11 +-
+ net/socket/socks5_client_socket.cc            | 154 ++++++++++++-
+ net/socket/socks5_client_socket.h             |  19 +-
+ net/socket/socks_connect_job.cc               |   9 +-
+ net/socket/socks_connect_job.h                |   8 +-
+ net/socket/ssl_client_socket_impl.cc          |  46 ++--
+ net/spdy/spdy_http_utils.cc                   |  42 ++--
+ net/ssl/ssl_config_service.h                  |  17 ++
+ net/url_request/url_request_context.cc        |   3 +-
+ net/url_request/url_request_http_job.cc       |  25 +--
+ third_party/litert/src                        |   1 +
+ third_party/nlohmann_json/src                 |   1 +
+ 44 files changed, 1263 insertions(+), 92 deletions(-)
+ create mode 100644 components/cronet/cronet_ssl_config_service.cc
+ create mode 100644 components/cronet/cronet_ssl_config_service.h
+ create mode 100644 components/cronet/native/include/cronet_tls_config.h
+ create mode 100644 components/cronet/tls_cipher_suite_mapper.cc
+ create mode 100644 components/cronet/tls_cipher_suite_mapper.h
+ create mode 100644 components/cronet/tls_curve_mapper.cc
+ create mode 100644 components/cronet/tls_curve_mapper.h
+ create mode 160000 third_party/litert/src
+ create mode 160000 third_party/nlohmann_json/src
+
+diff --git a/BUILD.gn b/BUILD.gn
+index f86761b03e..c8dd8bbc0c 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -91,7 +91,7 @@ group("gn_all") {
+     if (is_android) {
+       deps = [ "//components/cronet/android:cronet_package_android" ]
+     } else {
+-      deps = []
++      deps = [ "//components/cronet:cronet_package" ]
+     }
+   } else {
+     deps = [
+@@ -1541,7 +1541,7 @@ group("chromium_builder_perf") {
+     }
+   }
+ 
+-  if (is_linux && !is_castos) {
++  if (is_linux && !is_castos && !is_cronet_build) {
+     if (is_official_build) {
+       # In GN builds, this is controlled by the 'linux_dump_symbols'
+       # flag, which defaults to 1 for official builds. For now,
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 2a127468d8..340658c768 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -2301,6 +2301,10 @@ component("base") {
+       "process/set_process_title_linux.h",
+       "system/sys_info_linux.cc",
+     ]
++    sources += [
++      "nix/xdg_util.cc",
++      "nix/xdg_util.h",
++    ]
+     if (!is_cronet_build) {
+       # These dependencies are not required on Android.
+       sources += [
+@@ -2308,8 +2312,6 @@ component("base") {
+         "nix/mime_util_xdg.h",
+         "nix/scoped_xdg_activation_token_injector.cc",
+         "nix/scoped_xdg_activation_token_injector.h",
+-        "nix/xdg_util.cc",
+-        "nix/xdg_util.h",
+       ]
+       defines += [ "USE_SYMBOLIZE" ]
+       deps += [
+diff --git a/components/cronet/BUILD.gn b/components/cronet/BUILD.gn
+index 3d722dbea6..3dc9b6b8b9 100644
+--- a/components/cronet/BUILD.gn
++++ b/components/cronet/BUILD.gn
+@@ -45,12 +45,18 @@ source_set("cronet_common") {
+     "cronet_prefs_manager.h",
+     "cronet_proxy_delegate.cc",
+     "cronet_proxy_delegate.h",
++    "cronet_ssl_config_service.cc",
++    "cronet_ssl_config_service.h",
+     "cronet_upload_data_stream.cc",
+     "cronet_upload_data_stream.h",
+     "cronet_url_request.cc",
+     "cronet_url_request.h",
+     "host_cache_persistence_manager.cc",
+     "host_cache_persistence_manager.h",
++    "tls_cipher_suite_mapper.cc",
++    "tls_cipher_suite_mapper.h",
++    "tls_curve_mapper.cc",
++    "tls_curve_mapper.h",
+     "url_request_context_config.cc",
+     "url_request_context_config.h",
+   ]
+diff --git a/components/cronet/cronet_context.cc b/components/cronet/cronet_context.cc
+index 9ce6737c4f..c2c01fab5c 100644
+--- a/components/cronet/cronet_context.cc
++++ b/components/cronet/cronet_context.cc
+@@ -25,6 +25,7 @@
+ #include "base/message_loop/message_pump_type.h"
+ #include "base/metrics/statistics_recorder.h"
+ #include "base/no_destructor.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/synchronization/waitable_event.h"
+ #include "base/task/sequenced_task_runner.h"
+@@ -35,7 +36,10 @@
+ #include "build/build_config.h"
+ #include "components/cronet/cronet_global_state.h"
+ #include "components/cronet/cronet_prefs_manager.h"
++#include "components/cronet/cronet_ssl_config_service.h"
+ #include "components/cronet/host_cache_persistence_manager.h"
++#include "components/cronet/tls_cipher_suite_mapper.h"
++#include "components/cronet/tls_curve_mapper.h"
+ #include "components/cronet/url_request_context_config.h"
+ #include "net/base/completion_once_callback.h"
+ #include "net/base/ip_address.h"
+@@ -473,6 +477,34 @@ void CronetContext::NetworkTasks::SetSharedURLRequestContextBuilderConfig(
+   context_builder->set_enable_brotli(context_config_->enable_brotli);
+   context_builder->set_enable_zstd(base::FeatureList::IsEnabled(kEnableZstd));
+   context_builder->set_enable_shared_dictionary(context_config_->enable_brotli);
++
++  // Configure custom TLS cipher suites and curves/groups if specified.
++  std::vector<uint16_t> cipher_suite_ids =
++      TLSCipherSuiteMapper::NamesToIds(context_config_->custom_cipher_suites);
++  std::vector<net::SSLNamedGroupInfo> named_groups =
++      TLSCurveMapper::NamesToGroupInfos(context_config_->custom_tls_curves);
++
++  bool permute_extensions = true;
++  std::optional<bool> alps_use_new_codepoint;
++  for (const auto& extension : context_config_->custom_tls_extensions) {
++    std::string normalized = base::ToLowerASCII(extension);
++    base::TrimWhitespaceASCII(normalized, base::TRIM_ALL, &normalized);
++    if (normalized == "application_settings_old") {
++      alps_use_new_codepoint = false;
++      permute_extensions = false;
++    } else if (normalized == "application_settings") {
++      alps_use_new_codepoint = true;
++      permute_extensions = false;
++    }
++  }
++
++  if (!cipher_suite_ids.empty() || !named_groups.empty() ||
++      !context_config_->custom_tls_extensions.empty()) {
++    context_builder->set_ssl_config_service(
++        std::make_unique<CronetSSLConfigService>(
++            std::move(cipher_suite_ids), std::move(named_groups),
++            permute_extensions, alps_use_new_codepoint));
++  }
+ }
+ 
+ void CronetContext::NetworkTasks::SetSharedURLRequestContextConfig(
+diff --git a/components/cronet/cronet_global_state_stubs.cc b/components/cronet/cronet_global_state_stubs.cc
+index feb6bd5335..e910c2cc43 100644
+--- a/components/cronet/cronet_global_state_stubs.cc
++++ b/components/cronet/cronet_global_state_stubs.cc
+@@ -7,6 +7,7 @@
+ #include <tuple>
+ 
+ #include "base/at_exit.h"
++#include "base/command_line.h"
+ #include "base/feature_list.h"
+ #include "base/notimplemented.h"
+ #include "base/task/sequenced_task_runner.h"
+@@ -31,6 +32,11 @@ scoped_refptr<base::SingleThreadTaskRunner> InitializeAndCreateTaskRunner() {
+   std::ignore = new base::AtExitManager;
+ #endif
+ 
++  // Initialize CommandLine if not already initialized.
++  if (!base::CommandLine::InitializedForCurrentProcess()) {
++    base::CommandLine::Init(0, nullptr);
++  }
++
+   base::FeatureList::InitInstance(std::string(), std::string());
+ 
+   // Note that in component builds this ThreadPoolInstance will be shared with
+diff --git a/components/cronet/cronet_proxy_delegate.cc b/components/cronet/cronet_proxy_delegate.cc
+index 64820ba91b..6159e67461 100644
+--- a/components/cronet/cronet_proxy_delegate.cc
++++ b/components/cronet/cronet_proxy_delegate.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "components/cronet/cronet_proxy_delegate.h"
+ 
++#include "base/base64.h"
+ #include "base/logging.h"
+ #include "base/notreached.h"
+ #include "base/trace_event/trace_event.h"
+@@ -13,6 +14,7 @@
+ #include "net/base/network_anonymization_key.h"
+ #include "net/base/proxy_chain.h"
+ #include "net/base/proxy_delegate.h"
++#include "net/http/http_request_headers.h"
+ #include "net/proxy_resolution/proxy_info.h"
+ #include "url/gurl.h"
+ 
+@@ -58,6 +60,9 @@ void CronetProxyDelegate::OnResolveProxy(
+           case cronet::proto::ProxyScheme::HTTPS:
+             scheme = net::ProxyServer::Scheme::SCHEME_HTTPS;
+             break;
++          case cronet::proto::ProxyScheme::SOCKS5:
++            scheme = net::ProxyServer::Scheme::SCHEME_SOCKS5;
++            break;
+           default:
+             NOTREACHED();
+         }
+@@ -103,14 +108,32 @@ CronetProxyDelegate::OnBeforeTunnelRequest(
+                     "proxy_chain", proxy_chain.ToDebugString(), "proxy_index",
+                     proxy_index);
+   CHECK(proxy_chain.opaque_data().has_value());
+-  // org.chromium.net.Proxy.Callback#onBeforeTunnelRequest always continues
+-  // asynchronously. So, from //net's perspective, this always ends up in
+-  // `net::ERR_IO_PENDING`.
+-  network_tasks_->OnBeforeTunnelRequest(*proxy_chain.opaque_data(),
+-                                        std::move(callback));
+-  const auto result = net::ERR_IO_PENDING;
+-  TRACE_EVENT_END("cronet", "result", result);
+-  return base::unexpected(result);
++
++  net::HttpRequestHeaders headers;
++
++  // Only add Proxy-Authorization for HTTP/HTTPS proxies
++  // SOCKS5 proxies don't use HTTP CONNECT tunneling and don't support
++  // username/password authentication in Chromium's implementation
++  int chain_id = *proxy_chain.opaque_data();
++  if (chain_id >= 0 && chain_id < proxy_options_.proxies_size()) {
++    const auto& proxy = proxy_options_.proxies(chain_id);
++
++    // Check if this is an HTTP or HTTPS proxy (not SOCKS5)
++    bool is_http_proxy = (proxy.scheme() == cronet::proto::ProxyScheme::HTTP ||
++                          proxy.scheme() == cronet::proto::ProxyScheme::HTTPS);
++
++    if (is_http_proxy && proxy.has_username() && proxy.has_password() &&
++        !proxy.username().empty()) {
++      // Build Basic auth credentials: base64(username:password)
++      std::string credentials = proxy.username() + ":" + proxy.password();
++      std::string encoded = base::Base64Encode(credentials);
++      std::string auth_value = "Basic " + encoded;
++      headers.SetHeader(net::HttpRequestHeaders::kProxyAuthorization, auth_value);
++    }
++  }
++
++  TRACE_EVENT_END("cronet", "result", "sync_success");
++  return headers;
+ }
+ 
+ net::Error CronetProxyDelegate::OnTunnelHeadersReceived(
+@@ -122,14 +145,10 @@ net::Error CronetProxyDelegate::OnTunnelHeadersReceived(
+                     "proxy_chain", proxy_chain.ToDebugString(), "proxy_index",
+                     proxy_index);
+   CHECK(proxy_chain.opaque_data().has_value());
+-  // org.chromium.net.Proxy.Callback#onTunnelHeadersReceived always continues
+-  // asynchronously. So, from //net's perspective, this always ends up in
+-  // `net::ERR_IO_PENDING`.
+-  network_tasks_->OnTunnelHeadersReceived(
+-      *proxy_chain.opaque_data(), response_headers, std::move(callback));
+-  const auto result = net::ERR_IO_PENDING;
+-  TRACE_EVENT_END("cronet", "result", result);
+-  return result;
++  // Return OK synchronously - accept all tunnel response headers.
++  // Returning synchronously avoids timing issues with the async callback path.
++  TRACE_EVENT_END("cronet", "result", net::OK);
++  return net::OK;
+ }
+ 
+ void CronetProxyDelegate::SetProxyResolutionService(
+@@ -147,4 +166,47 @@ bool CronetProxyDelegate::AliasRequiresProxyOverride(
+   return false;
+ }
+ 
++std::string CronetProxyDelegate::GetProxyAuthHeaderForHttpProxy() const {
++  // Find the first HTTP proxy with authentication
++  for (int i = 0; i < proxy_options_.proxies_size(); ++i) {
++    const auto& proxy = proxy_options_.proxies(i);
++
++    // Only HTTP proxies (not HTTPS or SOCKS5) need preemptive auth for non-tunnel requests
++    if (proxy.scheme() == cronet::proto::ProxyScheme::HTTP &&
++        proxy.has_username() && proxy.has_password() &&
++        !proxy.username().empty()) {
++      // Build Basic auth credentials: base64(username:password)
++      std::string credentials = proxy.username() + ":" + proxy.password();
++      std::string encoded = base::Base64Encode(credentials);
++      return "Basic " + encoded;
++    }
++  }
++  return "";
++}
++
++bool CronetProxyDelegate::GetSocksAuthCredentials(
++    const net::ProxyChain& proxy_chain,
++    std::string* username,
++    std::string* password) {
++  if (!proxy_chain.opaque_data().has_value())
++    return false;
++
++  int chain_id = *proxy_chain.opaque_data();
++  if (chain_id < 0 || chain_id >= proxy_options_.proxies_size())
++    return false;
++
++  const auto& proxy = proxy_options_.proxies(chain_id);
++  if (proxy.scheme() != cronet::proto::ProxyScheme::SOCKS5)
++    return false;
++
++  if (!proxy.has_username() || !proxy.has_password() ||
++      proxy.username().empty()) {
++    return false;
++  }
++
++  *username = proxy.username();
++  *password = proxy.password();
++  return true;
++}
++
+ }  // namespace cronet
+diff --git a/components/cronet/cronet_proxy_delegate.h b/components/cronet/cronet_proxy_delegate.h
+index 90af8fdcc9..3f9bfce3c3 100644
+--- a/components/cronet/cronet_proxy_delegate.h
++++ b/components/cronet/cronet_proxy_delegate.h
+@@ -67,6 +67,15 @@ class CronetProxyDelegate final : public net::ProxyDelegate {
+       const std::vector<std::string>& dns_aliases,
+       const net::NetworkAnonymizationKey& network_anonymization_key) override;
+ 
++  // Get proxy authentication header for HTTP proxy (non-tunnel requests)
++  // Returns empty string if no authentication is needed
++  std::string GetProxyAuthHeaderForHttpProxy() const;
++
++  // Returns SOCKS5 authentication credentials for the given proxy chain.
++  bool GetSocksAuthCredentials(const net::ProxyChain& proxy_chain,
++                               std::string* username,
++                               std::string* password) override;
++
+  private:
+   const cronet::proto::ProxyOptions proxy_options_;
+   const raw_ptr<CronetContext::NetworkTasks> network_tasks_;
+diff --git a/components/cronet/cronet_ssl_config_service.cc b/components/cronet/cronet_ssl_config_service.cc
+new file mode 100644
+index 0000000000..6daae6664d
+--- /dev/null
++++ b/components/cronet/cronet_ssl_config_service.cc
+@@ -0,0 +1,119 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/cronet/cronet_ssl_config_service.h"
++
++#include <algorithm>
++#include <utility>
++#include "base/logging.h"
++#include "net/ssl/ssl_config.h"
++
++namespace cronet {
++
++namespace {
++
++// List of all commonly supported cipher suites in Chromium/BoringSSL
++// This is used to compute which cipher suites to disable when custom ones are specified
++const uint16_t kAllKnownCipherSuites[] = {
++    // TLS 1.3 cipher suites
++    0x1301,  // TLS_AES_128_GCM_SHA256
++    0x1302,  // TLS_AES_256_GCM_SHA384
++    0x1303,  // TLS_CHACHA20_POLY1305_SHA256
++
++    // TLS 1.2 ECDHE-ECDSA cipher suites
++    0xc02b,  // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
++    0xc02c,  // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
++    0xcca9,  // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
++    0xc009,  // TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
++    0xc00a,  // TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
++    0xc023,  // TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
++    0xc024,  // TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384
++
++    // TLS 1.2 ECDHE-RSA cipher suites
++    0xc02f,  // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
++    0xc030,  // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
++    0xcca8,  // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
++    0xc013,  // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
++    0xc014,  // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
++    0xc027,  // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
++    0xc028,  // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
++
++    // TLS 1.2 RSA cipher suites
++    0x009c,  // TLS_RSA_WITH_AES_128_GCM_SHA256
++    0x009d,  // TLS_RSA_WITH_AES_256_GCM_SHA384
++    0x002f,  // TLS_RSA_WITH_AES_128_CBC_SHA
++    0x0035,  // TLS_RSA_WITH_AES_256_CBC_SHA
++    0x003c,  // TLS_RSA_WITH_AES_128_CBC_SHA256
++    0x003d,  // TLS_RSA_WITH_AES_256_CBC_SHA256
++
++    // Legacy cipher suites
++    0x000a,  // TLS_RSA_WITH_3DES_EDE_CBC_SHA
++    0xc012,  // TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA
++    0xc008,  // TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA
++};
++
++// Converts custom cipher suite IDs to disabled cipher suites.
++// The approach is to disable all cipher suites that are NOT in the custom list.
++std::vector<uint16_t> ComputeDisabledCipherSuites(
++    const std::vector<uint16_t>& custom_cipher_suite_ids) {
++  if (custom_cipher_suite_ids.empty()) {
++    // No custom cipher suites specified, use defaults
++    return {};
++  }
++
++  // Compute disabled cipher suites (all known suites except the custom ones)
++  std::vector<uint16_t> disabled_cipher_suites;
++  for (uint16_t suite_id : kAllKnownCipherSuites) {
++    // Check if this suite is in the custom list
++    bool is_custom = std::find(custom_cipher_suite_ids.begin(),
++                               custom_cipher_suite_ids.end(),
++                               suite_id) != custom_cipher_suite_ids.end();
++    if (!is_custom) {
++      disabled_cipher_suites.push_back(suite_id);
++    }
++  }
++
++  LOG(INFO) << "Custom cipher suites enabled: " << custom_cipher_suite_ids.size()
++            << ", disabled: " << disabled_cipher_suites.size();
++
++  return disabled_cipher_suites;
++}
++
++}  // namespace
++
++CronetSSLConfigService::CronetSSLConfigService(
++    std::vector<uint16_t> custom_cipher_suite_ids,
++    std::vector<net::SSLNamedGroupInfo> custom_named_groups,
++    bool permute_extensions,
++    std::optional<bool> alps_use_new_codepoint) {
++  if (!custom_cipher_suite_ids.empty()) {
++    // Use custom cipher suite order (exact order as specified)
++    config_.custom_cipher_suite_order = custom_cipher_suite_ids;
++    config_.use_custom_cipher_order = true;
++  } else {
++    // Fallback to disabled cipher suites approach
++    config_.disabled_cipher_suites =
++        ComputeDisabledCipherSuites(custom_cipher_suite_ids);
++  }
++
++  if (!custom_named_groups.empty()) {
++    config_.supported_named_groups = std::move(custom_named_groups);
++  }
++
++  config_.permute_extensions = permute_extensions;
++  config_.alps_use_new_codepoint = alps_use_new_codepoint;
++}
++
++CronetSSLConfigService::~CronetSSLConfigService() = default;
++
++net::SSLContextConfig CronetSSLConfigService::GetSSLContextConfig() {
++  return config_;
++}
++
++bool CronetSSLConfigService::CanShareConnectionWithClientCerts(
++    std::string_view hostname) const {
++  return false;
++}
++
++}  // namespace cronet
+diff --git a/components/cronet/cronet_ssl_config_service.h b/components/cronet/cronet_ssl_config_service.h
+new file mode 100644
+index 0000000000..ac8f961a1b
+--- /dev/null
++++ b/components/cronet/cronet_ssl_config_service.h
+@@ -0,0 +1,41 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_CRONET_CRONET_SSL_CONFIG_SERVICE_H_
++#define COMPONENTS_CRONET_CRONET_SSL_CONFIG_SERVICE_H_
++
++#include <optional>
++#include <vector>
++#include "net/ssl/ssl_config_service.h"
++
++namespace cronet {
++
++// SSLConfigService implementation for Cronet that supports custom cipher suites.
++class CronetSSLConfigService : public net::SSLConfigService {
++ public:
++  // Creates a new CronetSSLConfigService with optional custom cipher suites and
++  // named groups.
++  CronetSSLConfigService(
++      std::vector<uint16_t> custom_cipher_suite_ids,
++      std::vector<net::SSLNamedGroupInfo> custom_named_groups = {},
++      bool permute_extensions = true,
++      std::optional<bool> alps_use_new_codepoint = std::nullopt);
++
++  CronetSSLConfigService(const CronetSSLConfigService&) = delete;
++  CronetSSLConfigService& operator=(const CronetSSLConfigService&) = delete;
++
++  ~CronetSSLConfigService() override;
++
++  // net::SSLConfigService implementation:
++  net::SSLContextConfig GetSSLContextConfig() override;
++  bool CanShareConnectionWithClientCerts(
++      std::string_view hostname) const override;
++
++ private:
++  net::SSLContextConfig config_;
++};
++
++}  // namespace cronet
++
++#endif  // COMPONENTS_CRONET_CRONET_SSL_CONFIG_SERVICE_H_
+diff --git a/components/cronet/cronet_url_request.cc b/components/cronet/cronet_url_request.cc
+index b3592f256c..213e20b937 100644
+--- a/components/cronet/cronet_url_request.cc
++++ b/components/cronet/cronet_url_request.cc
+@@ -10,9 +10,11 @@
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/logging.h"
++#include "base/strings/string_util.h"
+ #include "base/notreached.h"
+ #include "build/build_config.h"
+ #include "components/cronet/cronet_context.h"
++#include "components/cronet/cronet_proxy_delegate.h"
+ #include "net/base/idempotency.h"
+ #include "net/base/io_buffer.h"
+ #include "net/base/load_flags.h"
+@@ -117,7 +119,13 @@ bool CronetURLRequest::AddRequestHeader(const std::string& name,
+       !net::HttpUtil::IsValidHeaderValue(value)) {
+     return false;
+   }
+-  initial_request_headers_->SetHeader(name, value);
++  // For cookie headers, use AppendHeader to allow multiple cookies
++  // This preserves the order and allows multiple Cookie headers
++  if (base::EqualsCaseInsensitiveASCII(name, "cookie")) {
++    initial_request_headers_->AppendHeader(name, value);
++  } else {
++    initial_request_headers_->SetHeader(name, value);
++  }
+   return true;
+ }
+ 
+@@ -302,6 +310,20 @@ void CronetURLRequest::NetworkTasks::Start(
+   VLOG(1) << "Starting chromium request: "
+           << initial_url_.possibly_invalid_spec().c_str()
+           << " priority: " << RequestPriorityToString(initial_priority_);
++
++  // Add preemptive proxy authentication for HTTP proxies
++  // This is needed because HTTP requests through HTTP proxies don't use CONNECT tunneling
++  auto* url_request_context = context->GetURLRequestContext(network_);
++  if (url_request_context && url_request_context->proxy_delegate()) {
++    auto* cronet_proxy_delegate = static_cast<cronet::CronetProxyDelegate*>(
++        url_request_context->proxy_delegate());
++    std::string proxy_auth = cronet_proxy_delegate->GetProxyAuthHeaderForHttpProxy();
++    if (!proxy_auth.empty() && initial_url_.SchemeIs("http")) {
++      // Only add for HTTP requests (HTTPS uses CONNECT tunnel which is handled separately)
++      request_headers->SetHeader(net::HttpRequestHeaders::kProxyAuthorization, proxy_auth);
++    }
++  }
++
+   url_request_ = context->GetURLRequestContext(network_)->CreateRequest(
+       initial_url_, net::DEFAULT_PRIORITY, this, MISSING_TRAFFIC_ANNOTATION);
+   url_request_->SetLoadFlags(initial_load_flags_);
+diff --git a/components/cronet/native/cronet.idl b/components/cronet/native/cronet.idl
+index 8e83cb0cf7..10c47f26a7 100644
+--- a/components/cronet/native/cronet.idl
++++ b/components/cronet/native/cronet.idl
+@@ -610,6 +610,23 @@ struct EngineParams {
+    * JSON formatted experimental options to be used in Cronet Engine.
+    */
+   string experimental_options;
++
++  /**
++   * Proxy rules for the engine. Format examples:
++   * - "PROXY host:port" - HTTP proxy
++   * - "HTTPS host:port" - HTTPS proxy
++   * - "DIRECT" - Direct connection (no proxy)
++   * - "PROXY proxy1:8080; DIRECT" - Proxy with fallback to direct
++   * Multiple proxies can be specified separated by semicolons.
++   */
++  string proxy_rules;
++
++  /**
++   * If set to true, SSL certificate verification will be skipped.
++   * WARNING: This is insecure and should only be used for testing purposes.
++   * Do not use in production environments.
++   */
++  bool skip_cert_verify = false;
+ };
+ 
+ /**
+diff --git a/components/cronet/native/engine.cc b/components/cronet/native/engine.cc
+index 7efc1f675a..e94e12533b 100644
+--- a/components/cronet/native/engine.cc
++++ b/components/cronet/native/engine.cc
+@@ -15,24 +15,67 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/no_destructor.h"
+ #include "base/notimplemented.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
+ #include "build/build_config.h"
+ #include "components/cronet/cronet_context.h"
+ #include "components/cronet/cronet_global_state.h"
+ #include "components/cronet/native/generated/cronet.idl_impl_struct.h"
+ #include "components/cronet/native/include/cronet_c.h"
+ #include "components/cronet/native/runnables.h"
++#include "components/cronet/proto/request_context_config.pb.h"
+ #include "components/cronet/url_request_context_config.h"
+ #include "components/cronet/version.h"
+ #include "components/grpc_support/include/bidirectional_stream_c.h"
+ #include "net/base/completion_once_callback.h"
+ #include "net/base/hash_value.h"
+ #include "net/base/proxy_delegate.h"
++#include "net/base/net_errors.h"
++#include "net/cert/cert_verifier.h"
++#include "net/cert/cert_verify_result.h"
++#include "net/cert/x509_certificate.h"
+ #include "net/url_request/url_request_context.h"
+ #include "net/url_request/url_request_context_builder.h"
+ #include "net/url_request/url_request_context_getter.h"
+ 
+ namespace {
+ 
++// A CertVerifier that accepts all certificates without verification.
++// WARNING: This is insecure and should only be used for testing purposes.
++class InsecureCertVerifier : public net::CertVerifier {
++ public:
++  InsecureCertVerifier() = default;
++  ~InsecureCertVerifier() override = default;
++
++  int Verify(const RequestParams& params,
++             net::CertVerifyResult* verify_result,
++             net::CompletionOnceCallback callback,
++             std::unique_ptr<Request>* out_req,
++             const net::NetLogWithSource& net_log) override {
++    verify_result->Reset();
++    verify_result->verified_cert = params.certificate();
++    verify_result->cert_status = 0;  // No errors
++    verify_result->is_issued_by_known_root = false;
++    return net::OK;
++  }
++
++  void Verify2QwacBinding(
++      const std::string& binding,
++      const std::string& hostname,
++      const scoped_refptr<net::X509Certificate>& tls_cert,
++      base::OnceCallback<void(const scoped_refptr<net::X509Certificate>&)>
++          callback,
++      const net::NetLogWithSource& net_log) override {
++    // Return the original certificate since we don't verify 2QWAC binding
++    std::move(callback).Run(tls_cert);
++  }
++
++  void SetConfig(const Config& config) override {}
++  void AddObserver(Observer* observer) override {}
++  void RemoveObserver(Observer* observer) override {}
++};
++
+ class SharedEngineState {
+  public:
+   SharedEngineState()
+@@ -143,11 +186,13 @@ class Cronet_EngineImpl::Callback : public CronetContext::Callback {
+   void OnBeforeTunnelRequest(
+       int chain_id,
+       net::ProxyDelegate::OnBeforeTunnelRequestCallback callback) override {
++    // CronetProxyDelegate returns synchronously, this should not be called
+     NOTREACHED();
+   }
+   void OnTunnelHeadersReceived(int chain_id,
+                                const net::HttpResponseHeaders& response_headers,
+                                net::CompletionOnceCallback callback) override {
++    // CronetProxyDelegate returns synchronously, this should not be called
+     NOTREACHED();
+   }
+ 
+@@ -286,8 +331,162 @@ Cronet_RESULT Cronet_EngineImpl::StartWithParams(
+         params->network_thread_priority;
+   }
+ 
+-  // MockCertVerifier to use for testing purposes.
+-  context_config_builder.mock_cert_verifier = std::move(mock_cert_verifier_);
++  // Parse proxy_rules and create ProxyOptions.
++  if (!params->proxy_rules.empty()) {
++    cronet::proto::ProxyOptions proxy_options;
++    std::vector<std::string> proxy_entries = base::SplitString(
++        params->proxy_rules, ";", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++    for (const auto& entry : proxy_entries) {
++      cronet::proto::Proxy* proxy = proxy_options.add_proxies();
++      std::string trimmed_entry = entry;
++      base::TrimWhitespaceASCII(entry, base::TRIM_ALL, &trimmed_entry);
++
++      if (base::EqualsCaseInsensitiveASCII(trimmed_entry, "DIRECT")) {
++        proxy->set_scheme(cronet::proto::DIRECT);
++      } else if (base::StartsWith(trimmed_entry, "HTTPS ",
++                                   base::CompareCase::INSENSITIVE_ASCII) ||
++                 base::StartsWith(trimmed_entry, "HTTPS:",
++                                   base::CompareCase::INSENSITIVE_ASCII)) {
++        proxy->set_scheme(cronet::proto::HTTPS);
++        std::string host_port = trimmed_entry.substr(6);
++        base::TrimWhitespaceASCII(host_port, base::TRIM_ALL, &host_port);
++        size_t colon_pos = host_port.rfind(':');
++        if (colon_pos != std::string::npos) {
++          proxy->set_host(host_port.substr(0, colon_pos));
++          int port = 0;
++          if (base::StringToInt(host_port.substr(colon_pos + 1), &port)) {
++            proxy->set_port(port);
++          }
++        } else {
++          proxy->set_host(host_port);
++          proxy->set_port(443);
++        }
++      } else if (base::StartsWith(trimmed_entry, "http://",
++                                    base::CompareCase::INSENSITIVE_ASCII)) {
++        // Handle http://[user:pass@]host:port URL format - must be checked before "HTTP:"
++        proxy->set_scheme(cronet::proto::HTTP);
++        std::string host_port = trimmed_entry.substr(7);  // Remove "http://"
++        // Remove any trailing path
++        size_t slash_pos = host_port.find('/');
++        if (slash_pos != std::string::npos) {
++          host_port = host_port.substr(0, slash_pos);
++        }
++        // Handle optional auth: user:pass@host:port
++        size_t at_pos = host_port.find('@');
++        if (at_pos != std::string::npos) {
++          std::string auth = host_port.substr(0, at_pos);
++          host_port = host_port.substr(at_pos + 1);
++          // Parse username:password
++          size_t auth_colon = auth.find(':');
++          if (auth_colon != std::string::npos) {
++            proxy->set_username(auth.substr(0, auth_colon));
++            proxy->set_password(auth.substr(auth_colon + 1));
++          }
++        }
++        size_t colon_pos = host_port.rfind(':');
++        if (colon_pos != std::string::npos) {
++          proxy->set_host(host_port.substr(0, colon_pos));
++          int port = 0;
++          if (base::StringToInt(host_port.substr(colon_pos + 1), &port)) {
++            proxy->set_port(port);
++          }
++        } else {
++          proxy->set_host(host_port);
++          proxy->set_port(80);
++        }
++      } else if (base::StartsWith(trimmed_entry, "https://",
++                                    base::CompareCase::INSENSITIVE_ASCII)) {
++        // Handle https://[user:pass@]host:port URL format
++        proxy->set_scheme(cronet::proto::HTTPS);
++        std::string host_port = trimmed_entry.substr(8);  // Remove "https://"
++        // Remove any trailing path
++        size_t slash_pos = host_port.find('/');
++        if (slash_pos != std::string::npos) {
++          host_port = host_port.substr(0, slash_pos);
++        }
++        // Handle optional auth: user:pass@host:port
++        size_t at_pos = host_port.find('@');
++        if (at_pos != std::string::npos) {
++          std::string auth = host_port.substr(0, at_pos);
++          host_port = host_port.substr(at_pos + 1);
++          // Parse username:password
++          size_t auth_colon = auth.find(':');
++          if (auth_colon != std::string::npos) {
++            proxy->set_username(auth.substr(0, auth_colon));
++            proxy->set_password(auth.substr(auth_colon + 1));
++          }
++        }
++        size_t colon_pos = host_port.rfind(':');
++        if (colon_pos != std::string::npos) {
++          proxy->set_host(host_port.substr(0, colon_pos));
++          int port = 0;
++          if (base::StringToInt(host_port.substr(colon_pos + 1), &port)) {
++            proxy->set_port(port);
++          }
++        } else {
++          proxy->set_host(host_port);
++          proxy->set_port(443);
++        }
++      } else if (base::StartsWith(trimmed_entry, "socks5://",
++                                    base::CompareCase::INSENSITIVE_ASCII)) {
++        // Handle socks5://[user:pass@]host:port URL format
++        proxy->set_scheme(cronet::proto::SOCKS5);
++        std::string host_port = trimmed_entry.substr(9);  // Remove "socks5://"
++        // Remove any trailing path
++        size_t slash_pos = host_port.find('/');
++        if (slash_pos != std::string::npos) {
++          host_port = host_port.substr(0, slash_pos);
++        }
++        // Handle optional auth: user:pass@host:port
++        size_t at_pos = host_port.find('@');
++        if (at_pos != std::string::npos) {
++          std::string auth = host_port.substr(0, at_pos);
++          host_port = host_port.substr(at_pos + 1);
++          // Parse username:password for SOCKS5 RFC 1929 authentication
++          size_t auth_colon = auth.find(':');
++          if (auth_colon != std::string::npos) {
++            proxy->set_username(auth.substr(0, auth_colon));
++            proxy->set_password(auth.substr(auth_colon + 1));
++          }
++        }
++        size_t colon_pos = host_port.rfind(':');
++        if (colon_pos != std::string::npos) {
++          proxy->set_host(host_port.substr(0, colon_pos));
++          int port = 0;
++          if (base::StringToInt(host_port.substr(colon_pos + 1), &port)) {
++            proxy->set_port(port);
++          }
++        } else {
++          proxy->set_host(host_port);
++          proxy->set_port(1080);  // Default SOCKS5 port
++        }
++      } else {
++        // Default: treat as HTTP proxy with format "host:port"
++        proxy->set_scheme(cronet::proto::HTTP);
++        size_t colon_pos = trimmed_entry.rfind(':');
++        if (colon_pos != std::string::npos) {
++          proxy->set_host(trimmed_entry.substr(0, colon_pos));
++          int port = 0;
++          if (base::StringToInt(trimmed_entry.substr(colon_pos + 1), &port)) {
++            proxy->set_port(port);
++          }
++        } else {
++          proxy->set_host(trimmed_entry);
++          proxy->set_port(80);
++        }
++      }
++    }
++    context_config_builder.proxy_options = std::move(proxy_options);
++  }
++
++  // CertVerifier to use for testing purposes or to skip cert verification.
++  if (params->skip_cert_verify) {
++    // Create an InsecureCertVerifier that accepts all certificates
++    context_config_builder.mock_cert_verifier =
++        std::make_unique<InsecureCertVerifier>();
++  } else {
++    context_config_builder.mock_cert_verifier = std::move(mock_cert_verifier_);
++  }
+   std::unique_ptr<URLRequestContextConfig> config =
+       context_config_builder.Build();
+ 
+diff --git a/components/cronet/native/generated/cronet.idl_c.h b/components/cronet/native/generated/cronet.idl_c.h
+index 988e6efacb..3409c6f55c 100644
+--- a/components/cronet/native/generated/cronet.idl_c.h
++++ b/components/cronet/native/generated/cronet.idl_c.h
+@@ -837,6 +837,12 @@ CRONET_EXPORT
+ void Cronet_EngineParams_experimental_options_set(
+     Cronet_EngineParamsPtr self,
+     const Cronet_String experimental_options);
++CRONET_EXPORT
++void Cronet_EngineParams_proxy_rules_set(Cronet_EngineParamsPtr self,
++                                         const Cronet_String proxy_rules);
++CRONET_EXPORT
++void Cronet_EngineParams_skip_cert_verify_set(Cronet_EngineParamsPtr self,
++                                               const bool skip_cert_verify);
+ // Cronet_EngineParams getters.
+ CRONET_EXPORT
+ bool Cronet_EngineParams_enable_check_result_get(
+@@ -888,6 +894,12 @@ double Cronet_EngineParams_network_thread_priority_get(
+ CRONET_EXPORT
+ Cronet_String Cronet_EngineParams_experimental_options_get(
+     const Cronet_EngineParamsPtr self);
++CRONET_EXPORT
++Cronet_String Cronet_EngineParams_proxy_rules_get(
++    const Cronet_EngineParamsPtr self);
++CRONET_EXPORT
++bool Cronet_EngineParams_skip_cert_verify_get(
++    const Cronet_EngineParamsPtr self);
+ 
+ ///////////////////////
+ // Struct Cronet_HttpHeader.
+diff --git a/components/cronet/native/generated/cronet.idl_impl_struct.cc b/components/cronet/native/generated/cronet.idl_impl_struct.cc
+index b9120ff8c2..ec9f5dffa9 100644
+--- a/components/cronet/native/generated/cronet.idl_impl_struct.cc
++++ b/components/cronet/native/generated/cronet.idl_impl_struct.cc
+@@ -329,6 +329,18 @@ void Cronet_EngineParams_experimental_options_set(
+   self->experimental_options = experimental_options;
+ }
+ 
++void Cronet_EngineParams_proxy_rules_set(Cronet_EngineParamsPtr self,
++                                         const Cronet_String proxy_rules) {
++  DCHECK(self);
++  self->proxy_rules = proxy_rules;
++}
++
++void Cronet_EngineParams_skip_cert_verify_set(Cronet_EngineParamsPtr self,
++                                               const bool skip_cert_verify) {
++  DCHECK(self);
++  self->skip_cert_verify = skip_cert_verify;
++}
++
+ // Struct Cronet_EngineParams getters.
+ bool Cronet_EngineParams_enable_check_result_get(
+     const Cronet_EngineParamsPtr self) {
+@@ -431,6 +443,18 @@ Cronet_String Cronet_EngineParams_experimental_options_get(
+   return self->experimental_options.c_str();
+ }
+ 
++Cronet_String Cronet_EngineParams_proxy_rules_get(
++    const Cronet_EngineParamsPtr self) {
++  DCHECK(self);
++  return self->proxy_rules.c_str();
++}
++
++bool Cronet_EngineParams_skip_cert_verify_get(
++    const Cronet_EngineParamsPtr self) {
++  DCHECK(self);
++  return self->skip_cert_verify;
++}
++
+ // Struct Cronet_HttpHeader.
+ Cronet_HttpHeader::Cronet_HttpHeader() = default;
+ 
+diff --git a/components/cronet/native/generated/cronet.idl_impl_struct.h b/components/cronet/native/generated/cronet.idl_impl_struct.h
+index badb341ce3..efef00bd5d 100644
+--- a/components/cronet/native/generated/cronet.idl_impl_struct.h
++++ b/components/cronet/native/generated/cronet.idl_impl_struct.h
+@@ -95,6 +95,8 @@ struct Cronet_EngineParams {
+   bool enable_public_key_pinning_bypass_for_local_trust_anchors = true;
+   double network_thread_priority = std::numeric_limits<double>::quiet_NaN();
+   std::string experimental_options;
++  std::string proxy_rules;
++  bool skip_cert_verify = false;
+ };
+ 
+ // Struct Cronet_HttpHeader.
+diff --git a/components/cronet/native/include/cronet_tls_config.h b/components/cronet/native/include/cronet_tls_config.h
+new file mode 100644
+index 0000000000..c284c776df
+--- /dev/null
++++ b/components/cronet/native/include/cronet_tls_config.h
+@@ -0,0 +1,48 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_CRONET_NATIVE_INCLUDE_CRONET_TLS_CONFIG_H_
++#define COMPONENTS_CRONET_NATIVE_INCLUDE_CRONET_TLS_CONFIG_H_
++
++#include "cronet_export.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// Sets custom TLS cipher suites for the Cronet engine.
++// This must be called before Cronet_Engine_StartWithParams().
++//
++// Parameters:
++//   engine: The Cronet engine instance
++//   cipher_suite_names: Array of cipher suite names (e.g., "TLS_RSA_WITH_AES_128_CBC_SHA")
++//   count: Number of cipher suite names in the array
++//
++// Supported cipher suite names (IANA standard names):
++//   - TLS 1.3: TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256
++//   - ECDHE-ECDSA: TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, etc.
++//   - ECDHE-RSA: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, etc.
++//   - RSA: TLS_RSA_WITH_AES_128_GCM_SHA256, TLS_RSA_WITH_AES_256_GCM_SHA384, etc.
++//   - CBC: TLS_RSA_WITH_AES_128_CBC_SHA, TLS_RSA_WITH_AES_256_CBC_SHA, etc.
++//
++// Example:
++//   const char* cipher_suites[] = {
++//       "TLS_AES_128_GCM_SHA256",
++//       "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
++//       "TLS_RSA_WITH_AES_128_CBC_SHA"
++//   };
++//   Cronet_Engine_SetCustomCipherSuites(engine, cipher_suites, 3);
++//
++// Returns:
++//   0 on success, non-zero on error
++CRONET_EXPORT int Cronet_Engine_SetCustomCipherSuites(
++    void* engine,
++    const char* const* cipher_suite_names,
++    size_t count);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // COMPONENTS_CRONET_NATIVE_INCLUDE_CRONET_TLS_CONFIG_H_
+diff --git a/components/cronet/native/url_request.cc b/components/cronet/native/url_request.cc
+index c150215568..41bd78a012 100644
+--- a/components/cronet/native/url_request.cc
++++ b/components/cronet/native/url_request.cc
+@@ -407,8 +407,6 @@ Cronet_RESULT Cronet_UrlRequestImpl::InitWithParams(
+   for (const auto& request_header : params->request_headers) {
+     if (request_header.name.empty())
+       return engine_->CheckResult(Cronet_RESULT_NULL_POINTER_HEADER_NAME);
+-    if (request_header.value.empty())
+-      return engine_->CheckResult(Cronet_RESULT_NULL_POINTER_HEADER_VALUE);
+     if (!request_->AddRequestHeader(request_header.name,
+                                     request_header.value)) {
+       return engine_->CheckResult(
+diff --git a/components/cronet/proto/request_context_config.proto b/components/cronet/proto/request_context_config.proto
+index 4b93959203..ff0469a201 100644
+--- a/components/cronet/proto/request_context_config.proto
++++ b/components/cronet/proto/request_context_config.proto
+@@ -34,6 +34,9 @@ message Proxy {
+   optional ProxyScheme scheme = 1;
+   optional string host = 2;
+   optional int32 port = 3;
++  // Optional authentication credentials
++  optional string username = 4;
++  optional string password = 5;
+ }
+ 
+ // Maps to org.chromium.net.Proxy.Scheme.
+@@ -43,4 +46,5 @@ enum ProxyScheme {
+   DIRECT = 0;
+   HTTP = 1;
+   HTTPS = 2;
++  SOCKS5 = 3;
+ }
+diff --git a/components/cronet/tls_cipher_suite_mapper.cc b/components/cronet/tls_cipher_suite_mapper.cc
+new file mode 100644
+index 0000000000..9447679213
+--- /dev/null
++++ b/components/cronet/tls_cipher_suite_mapper.cc
+@@ -0,0 +1,98 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/cronet/tls_cipher_suite_mapper.h"
++
++#include <map>
++#include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_util.h"
++
++namespace cronet {
++
++namespace {
++
++// Mapping of IANA TLS cipher suite names to their numeric IDs
++// Based on https://www.iana.org/assignments/tls-parameters/tls-parameters.xml
++const std::map<std::string, uint16_t>& GetCipherSuiteMap() {
++  static const base::NoDestructor<std::map<std::string, uint16_t>> kCipherSuiteMap({
++      // TLS 1.3 cipher suites
++      {"TLS_AES_128_GCM_SHA256", 0x1301},
++      {"TLS_AES_256_GCM_SHA384", 0x1302},
++      {"TLS_CHACHA20_POLY1305_SHA256", 0x1303},
++      {"TLS_AES_128_CCM_SHA256", 0x1304},
++      {"TLS_AES_128_CCM_8_SHA256", 0x1305},
++
++      // TLS 1.2 ECDHE-ECDSA cipher suites
++      {"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", 0xc02b},
++      {"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", 0xc02c},
++      {"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", 0xcca9},
++      {"TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA", 0xc009},
++      {"TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", 0xc00a},
++      {"TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256", 0xc023},
++      {"TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384", 0xc024},
++
++      // TLS 1.2 ECDHE-RSA cipher suites
++      {"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", 0xc02f},
++      {"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", 0xc030},
++      {"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256", 0xcca8},
++      {"TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", 0xc013},
++      {"TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", 0xc014},
++      {"TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256", 0xc027},
++      {"TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384", 0xc028},
++
++      // TLS 1.2 RSA cipher suites
++      {"TLS_RSA_WITH_AES_128_GCM_SHA256", 0x009c},
++      {"TLS_RSA_WITH_AES_256_GCM_SHA384", 0x009d},
++      {"TLS_RSA_WITH_AES_128_CBC_SHA", 0x002f},
++      {"TLS_RSA_WITH_AES_256_CBC_SHA", 0x0035},
++      {"TLS_RSA_WITH_AES_128_CBC_SHA256", 0x003c},
++      {"TLS_RSA_WITH_AES_256_CBC_SHA256", 0x003d},
++
++      // Legacy cipher suites (for compatibility)
++      {"TLS_RSA_WITH_3DES_EDE_CBC_SHA", 0x000a},
++      {"TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA", 0xc012},
++      {"TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA", 0xc008},
++  });
++  return *kCipherSuiteMap;
++}
++
++}  // namespace
++
++uint16_t TLSCipherSuiteMapper::NameToId(const std::string& name) {
++  // Normalize the name (trim whitespace, convert to uppercase)
++  std::string normalized_name = base::ToUpperASCII(name);
++  base::TrimWhitespaceASCII(normalized_name, base::TRIM_ALL, &normalized_name);
++
++  // Skip GREASE values - they are handled automatically by BoringSSL
++  if (normalized_name == "TLS_GREASE" || normalized_name.find("GREASE") != std::string::npos) {
++    return 0;
++  }
++
++  const auto& map = GetCipherSuiteMap();
++  auto it = map.find(normalized_name);
++  if (it != map.end()) {
++    return it->second;
++  }
++
++  LOG(WARNING) << "Unknown TLS cipher suite name: " << name;
++  return 0;
++}
++
++std::vector<uint16_t> TLSCipherSuiteMapper::NamesToIds(
++    const std::vector<std::string>& names) {
++  std::vector<uint16_t> ids;
++  ids.reserve(names.size());
++
++  for (const auto& name : names) {
++    uint16_t id = NameToId(name);
++    if (id != 0) {
++      ids.push_back(id);
++    }
++  }
++
++  return ids;
++}
++
++}  // namespace cronet
+diff --git a/components/cronet/tls_cipher_suite_mapper.h b/components/cronet/tls_cipher_suite_mapper.h
+new file mode 100644
+index 0000000000..5b5a7737c5
+--- /dev/null
++++ b/components/cronet/tls_cipher_suite_mapper.h
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_CRONET_TLS_CIPHER_SUITE_MAPPER_H_
++#define COMPONENTS_CRONET_TLS_CIPHER_SUITE_MAPPER_H_
++
++#include <stdint.h>
++#include <string>
++#include <vector>
++
++namespace cronet {
++
++// Maps TLS cipher suite names to their numeric IDs.
++// Supports standard IANA names like "TLS_RSA_WITH_AES_128_CBC_SHA".
++class TLSCipherSuiteMapper {
++ public:
++  // Converts a cipher suite name to its numeric ID.
++  // Returns 0 if the name is not recognized.
++  static uint16_t NameToId(const std::string& name);
++
++  // Converts a list of cipher suite names to their numeric IDs.
++  // Unrecognized names are skipped.
++  static std::vector<uint16_t> NamesToIds(
++      const std::vector<std::string>& names);
++};
++
++}  // namespace cronet
++
++#endif  // COMPONENTS_CRONET_TLS_CIPHER_SUITE_MAPPER_H_
+diff --git a/components/cronet/tls_curve_mapper.cc b/components/cronet/tls_curve_mapper.cc
+new file mode 100644
+index 0000000000..b60ef77edb
+--- /dev/null
++++ b/components/cronet/tls_curve_mapper.cc
+@@ -0,0 +1,86 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/cronet/tls_curve_mapper.h"
++
++#include <map>
++
++#include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_util.h"
++#include "third_party/boringssl/src/include/openssl/ssl.h"
++
++namespace cronet {
++
++namespace {
++
++const std::map<std::string, net::SSLNamedGroupInfo>& GetCurveMap() {
++  static const base::NoDestructor<std::map<std::string, net::SSLNamedGroupInfo>>
++      kCurveMap({
++#ifdef SSL_GROUP_X25519_MLKEM768
++          {"X25519MLKEM768", {.group_id = SSL_GROUP_X25519_MLKEM768,
++                               .send_key_share = true}},
++#else
++          {"X25519MLKEM768", {.group_id = 0x11ec,
++                               .send_key_share = true}},
++#endif
++          {"X25519KYBER768", {.group_id = 0x6399,
++                               .send_key_share = true}},
++          {"X25519KYBER768DRAFT00",
++           {.group_id = 0x6399, .send_key_share = true}},
++          {"X25519", {.group_id = SSL_GROUP_X25519, .send_key_share = true}},
++          {"P-256", {.group_id = SSL_GROUP_SECP256R1, .send_key_share = false}},
++          {"SECP256R1",
++           {.group_id = SSL_GROUP_SECP256R1, .send_key_share = false}},
++          {"P-384", {.group_id = SSL_GROUP_SECP384R1, .send_key_share = false}},
++          {"SECP384R1",
++           {.group_id = SSL_GROUP_SECP384R1, .send_key_share = false}},
++      });
++  return *kCurveMap;
++}
++
++}  // namespace
++
++std::optional<net::SSLNamedGroupInfo> TLSCurveMapper::NameToGroupInfo(
++    const std::string& name) {
++  std::string normalized_name = base::ToUpperASCII(name);
++  base::TrimWhitespaceASCII(normalized_name, base::TRIM_ALL, &normalized_name);
++
++  const auto& map = GetCurveMap();
++  auto it = map.find(normalized_name);
++  if (it != map.end()) {
++    return it->second;
++  }
++
++  LOG(WARNING) << "Unknown TLS curve name: " << name;
++  return std::nullopt;
++}
++
++std::vector<net::SSLNamedGroupInfo> TLSCurveMapper::NamesToGroupInfos(
++    const std::vector<std::string>& names) {
++  std::vector<net::SSLNamedGroupInfo> infos;
++  infos.reserve(names.size());
++
++  for (const auto& name : names) {
++    std::optional<net::SSLNamedGroupInfo> info = NameToGroupInfo(name);
++    if (!info.has_value()) {
++      continue;
++    }
++
++    bool duplicate = false;
++    for (const auto& existing : infos) {
++      if (existing.group_id == info->group_id) {
++        duplicate = true;
++        break;
++      }
++    }
++    if (!duplicate) {
++      infos.push_back(*info);
++    }
++  }
++
++  return infos;
++}
++
++}  // namespace cronet
+diff --git a/components/cronet/tls_curve_mapper.h b/components/cronet/tls_curve_mapper.h
+new file mode 100644
+index 0000000000..d4c658c425
+--- /dev/null
++++ b/components/cronet/tls_curve_mapper.h
+@@ -0,0 +1,32 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_CRONET_TLS_CURVE_MAPPER_H_
++#define COMPONENTS_CRONET_TLS_CURVE_MAPPER_H_
++
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "net/ssl/ssl_config_service.h"
++
++namespace cronet {
++
++// Maps TLS curve/group names to net::SSLNamedGroupInfo.
++class TLSCurveMapper {
++ public:
++  // Converts a curve/group name to SSLNamedGroupInfo.
++  // Returns std::nullopt if the name is not recognized.
++  static std::optional<net::SSLNamedGroupInfo> NameToGroupInfo(
++      const std::string& name);
++
++  // Converts a list of names to SSLNamedGroupInfo entries.
++  // Unrecognized names are skipped.
++  static std::vector<net::SSLNamedGroupInfo> NamesToGroupInfos(
++      const std::vector<std::string>& names);
++};
++
++}  // namespace cronet
++
++#endif  // COMPONENTS_CRONET_TLS_CURVE_MAPPER_H_
+diff --git a/components/cronet/url_request_context_config.cc b/components/cronet/url_request_context_config.cc
+index a03eccf05d..3341ae4d50 100644
+--- a/components/cronet/url_request_context_config.cc
++++ b/components/cronet/url_request_context_config.cc
+@@ -765,9 +765,49 @@ void URLRequestContextConfig::SetContextBuilderExperimentalOptions(
+         continue;
+       }
+       session_params->spdy_go_away_on_ip_change = iter->second.GetBool();
++    } else if (iter->first == "tls_cipher_suites") {
++      if (!iter->second.is_list()) {
++        LOG(ERROR) << "\"" << iter->first << "\" config params \""
++                   << iter->second << "\" is not a list";
++        effective_experimental_options.Remove(iter->first);
++        continue;
++      }
++      const base::Value::List& cipher_suites_list = iter->second.GetList();
++      custom_cipher_suites.clear();
++      for (const auto& cipher_suite : cipher_suites_list) {
++        if (cipher_suite.is_string()) {
++          custom_cipher_suites.push_back(cipher_suite.GetString());
++        }
++      }
++    } else if (iter->first == "tls_curves") {
++      if (!iter->second.is_list()) {
++        LOG(ERROR) << "\"" << iter->first << "\" config params \""
++                   << iter->second << "\" is not a list";
++        effective_experimental_options.Remove(iter->first);
++        continue;
++      }
++      const base::Value::List& curves_list = iter->second.GetList();
++      custom_tls_curves.clear();
++      for (const auto& curve : curves_list) {
++        if (curve.is_string()) {
++          custom_tls_curves.push_back(curve.GetString());
++        }
++      }
++    } else if (iter->first == "tls_extensions") {
++      if (!iter->second.is_list()) {
++        LOG(ERROR) << "\"" << iter->first << "\" config params \""
++                   << iter->second << "\" is not a list";
++        effective_experimental_options.Remove(iter->first);
++        continue;
++      }
++      const base::Value::List& extensions_list = iter->second.GetList();
++      custom_tls_extensions.clear();
++      for (const auto& extension : extensions_list) {
++        if (extension.is_string()) {
++          custom_tls_extensions.push_back(extension.GetString());
++        }
++      }
+     } else {
+-      LOG(WARNING) << "Unrecognized Cronet experimental option \""
+-                   << iter->first << "\" with params \"" << iter->second;
+       effective_experimental_options.Remove(iter->first);
+     }
+   }
+@@ -918,7 +958,7 @@ URLRequestContextConfigBuilder::Build() {
+       experimental_options, std::move(mock_cert_verifier),
+       enable_network_quality_estimator,
+       bypass_public_key_pinning_for_local_trust_anchors,
+-      network_thread_priority, std::optional<cronet::proto::ProxyOptions>());
++      network_thread_priority, std::move(proxy_options));
+ }
+ 
+ }  // namespace cronet
+diff --git a/components/cronet/url_request_context_config.h b/components/cronet/url_request_context_config.h
+index 7bfe70d40e..0d7b6d6f03 100644
+--- a/components/cronet/url_request_context_config.h
++++ b/components/cronet/url_request_context_config.h
+@@ -181,6 +181,20 @@ struct URLRequestContextConfig {
+ 
+   const std::optional<cronet::proto::ProxyOptions> proxy_options;
+ 
++  // Custom TLS cipher suites to enable (specified by name).
++  // If empty, uses default cipher suites.
++  std::vector<std::string> custom_cipher_suites;
++
++  // Custom TLS curves/groups to enable in order (specified by name).
++  // If empty, uses default supported groups.
++  std::vector<std::string> custom_tls_curves;
++
++  // Custom TLS extension controls (specified by name).
++  // Recognized values include:
++  // - "application_settings_old"
++  // - "application_settings"
++  std::vector<std::string> custom_tls_extensions;
++
+   static bool ExperimentalOptionsParsingIsAllowedToFail() {
+     return DCHECK_IS_ON();
+   }
+@@ -330,6 +344,9 @@ struct URLRequestContextConfigBuilder {
+   // On Android, corresponds to android.os.Process.setThreadPriority() values.
+   // Do not specify for other targets.
+   std::optional<int> network_thread_priority;
++
++  // Proxy options for the engine.
++  std::optional<cronet::proto::ProxyOptions> proxy_options;
+ };
+ 
+ }  // namespace cronet
+diff --git a/components/cronet/url_request_context_config_unittest.cc b/components/cronet/url_request_context_config_unittest.cc
+index 00d6a4d451..7e2475f787 100644
+--- a/components/cronet/url_request_context_config_unittest.cc
++++ b/components/cronet/url_request_context_config_unittest.cc
+@@ -139,6 +139,10 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
+   // See http://crbug.com/696569.
+   options.Set("disable_ipv6_on_wifi", true);
+   options.Set("spdy_go_away_on_ip_change", true);
++  options.Set("tls_curves",
++              base::Value::List().Append("X25519MLKEM768").Append("P-256"));
++  options.Set("tls_extensions",
++              base::Value::List().Append("application_settings_old"));
+   std::string options_json;
+   EXPECT_TRUE(base::JSONWriter::Write(options, &options_json));
+ 
+@@ -305,6 +309,11 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
+   EXPECT_TRUE(config->network_thread_priority);
+   EXPECT_EQ(42, config->network_thread_priority.value());
+   EXPECT_FALSE(config->bidi_stream_detect_broken_connection);
++  ASSERT_EQ(2u, config->custom_tls_curves.size());
++  EXPECT_EQ("X25519MLKEM768", config->custom_tls_curves[0]);
++  EXPECT_EQ("P-256", config->custom_tls_curves[1]);
++  ASSERT_EQ(1u, config->custom_tls_extensions.size());
++  EXPECT_EQ("application_settings_old", config->custom_tls_extensions[0]);
+ 
+   // When UseDnsHttpsSvcb option is not set, the value of net::features are
+   // used.
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index ff29a22eb7..6b6a4429a0 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -1585,6 +1585,10 @@ component("net") {
+     }
+   }
+ 
++  if (is_linux && !use_nss_certs) {
++    sources += [ "cert/test_root_certs_builtin.cc" ]
++  }
++
+   if (use_nss_certs) {
+     sources += [
+       "cert/internal/trust_store_nss.cc",
+@@ -2717,7 +2721,7 @@ if (!is_cronet_build) {
+   }
+ }
+ 
+-if (is_cronet_build) {
++if (is_cronet_build && is_android) {
+   _test_target_type = "cronet_test"
+ } else {
+   _test_target_type = "test"
+diff --git a/net/base/proxy_delegate.cc b/net/base/proxy_delegate.cc
+index 515426fe1e..dbc5115d3a 100644
+--- a/net/base/proxy_delegate.cc
++++ b/net/base/proxy_delegate.cc
+@@ -17,4 +17,10 @@ std::optional<bool> ProxyDelegate::CanFalloverToNextProxyOverride(
+   return std::nullopt;
+ }
+ 
++bool ProxyDelegate::GetSocksAuthCredentials(const ProxyChain& proxy_chain,
++                                            std::string* username,
++                                            std::string* password) {
++  return false;
++}
++
+ }  // namespace net
+diff --git a/net/base/proxy_delegate.h b/net/base/proxy_delegate.h
+index f8adf9d11c..ac9bca8569 100644
+--- a/net/base/proxy_delegate.h
++++ b/net/base/proxy_delegate.h
+@@ -122,6 +122,14 @@ class NET_EXPORT ProxyDelegate {
+       const std::vector<std::string>& dns_aliases,
+       const net::NetworkAnonymizationKey& network_anonymization_key) = 0;
+ 
++  // Returns SOCKS5 authentication credentials for the given proxy chain.
++  // `username` and `password` are output parameters.
++  // Returns true if credentials are available, false otherwise.
++  // Default implementation returns false (no credentials).
++  virtual bool GetSocksAuthCredentials(const ProxyChain& proxy_chain,
++                                       std::string* username,
++                                       std::string* password);
++
+   // Called after a stream creation succeeds or fails. `duration` indicates
+   // how long the attempt took, from when the jobs started to when the attempt
+   // succeeded or failed.
+diff --git a/net/cert/ev_root_ca_metadata.cc b/net/cert/ev_root_ca_metadata.cc
+index 25be2e5ff9..10cc8e2f0c 100644
+--- a/net/cert/ev_root_ca_metadata.cc
++++ b/net/cert/ev_root_ca_metadata.cc
+@@ -114,24 +114,20 @@ bool EVRootCAMetadata::RemoveEVCA(const SHA256HashValue& fingerprint) {
+ //
+ 
+ bool EVRootCAMetadata::IsEVPolicyOID(bssl::der::Input policy_oid) const {
+-  LOG(WARNING) << "Not implemented";
+   return false;
+ }
+ 
+ bool EVRootCAMetadata::HasEVPolicyOID(const SHA256HashValue& fingerprint,
+                                       bssl::der::Input policy_oid) const {
+-  LOG(WARNING) << "Not implemented";
+   return false;
+ }
+ 
+ bool EVRootCAMetadata::AddEVCA(const SHA256HashValue& fingerprint,
+                                const char* policy) {
+-  LOG(WARNING) << "Not implemented";
+   return true;
+ }
+ 
+ bool EVRootCAMetadata::RemoveEVCA(const SHA256HashValue& fingerprint) {
+-  LOG(WARNING) << "Not implemented";
+   return true;
+ }
+ 
+diff --git a/net/cert/internal/system_trust_store.cc b/net/cert/internal/system_trust_store.cc
+index b5e7af2bae..652d2105fe 100644
+--- a/net/cert/internal/system_trust_store.cc
++++ b/net/cert/internal/system_trust_store.cc
+@@ -380,6 +380,14 @@ void InitializeTrustStoreAndroid() {}
+ 
+ #endif  // CHROME_ROOT_STORE_SUPPORTED
+ 
++#elif BUILDFLAG(IS_LINUX)
++
++// Linux without NSS: use Chrome Root Store only, no platform trust store.
++std::unique_ptr<SystemTrustStore> CreateSslSystemTrustStoreChromeRoot(
++    std::unique_ptr<TrustStoreChrome> chrome_root) {
++  return CreateChromeOnlySystemTrustStore(std::move(chrome_root));
++}
++
+ #endif
+ 
+ }  // namespace net
+diff --git a/net/http/http_request_headers.cc b/net/http/http_request_headers.cc
+index 14e3752ec4..e9e95b5dc4 100644
+--- a/net/http/http_request_headers.cc
++++ b/net/http/http_request_headers.cc
+@@ -167,6 +167,16 @@ void HttpRequestHeaders::SetHeaderIfMissing(std::string_view key,
+     headers_.push_back(HeaderKeyValuePair(key, value));
+ }
+ 
++void HttpRequestHeaders::AppendHeader(std::string_view key,
++                                      std::string_view value) {
++  // Invalid header names or values could mean clients can attach
++  // browser-internal headers.
++  CHECK(HttpUtil::IsValidHeaderName(key));
++  CHECK(HttpUtil::IsValidHeaderValue(value));
++  // Always append, don't check if it exists - allows multiple same-name headers
++  headers_.push_back(HeaderKeyValuePair(key, value));
++}
++
+ void HttpRequestHeaders::RemoveHeader(std::string_view key) {
+   auto it = FindHeader(key);
+   if (it != headers_.end())
+diff --git a/net/http/http_request_headers.h b/net/http/http_request_headers.h
+index ee3a4ca47f..090037e914 100644
+--- a/net/http/http_request_headers.h
++++ b/net/http/http_request_headers.h
+@@ -152,6 +152,12 @@ class NET_EXPORT HttpRequestHeaders {
+   // |value| passes HttpUtil::IsValidHeaderValue().
+   void SetHeaderIfMissing(std::string_view key, std::string_view value);
+ 
++  // Appends a header without checking if it already exists.
++  // This allows multiple headers with the same name (e.g., multiple Cookie headers).
++  // The caller must ensure that |key| passes HttpUtil::IsValidHeaderName() and
++  // |value| passes HttpUtil::IsValidHeaderValue().
++  void AppendHeader(std::string_view key, std::string_view value);
++
+   // Removes the first header that matches (case insensitive) |key|.
+   void RemoveHeader(std::string_view key);
+ 
+diff --git a/net/socket/connect_job_params_factory.cc b/net/socket/connect_job_params_factory.cc
+index e975e09a16..35494f7e2d 100644
+--- a/net/socket/connect_job_params_factory.cc
++++ b/net/socket/connect_job_params_factory.cc
+@@ -28,6 +28,8 @@
+ #include "net/socket/socks_connect_job.h"
+ #include "net/socket/ssl_connect_job.h"
+ #include "net/socket/transport_connect_job.h"
++#include "net/base/proxy_delegate.h"
++#include "net/socket/connect_job.h"
+ #include "net/ssl/ssl_config.h"
+ #include "net/traffic_annotation/network_traffic_annotation.h"
+ #include "url/gurl.h"
+@@ -264,10 +266,17 @@ ConnectJobParams CreateProxyParams(
+     DCHECK_EQ(1u, proxy_chain.length());
+     // TODO(crbug.com/40181080): Pass `endpoint` directly (preserving scheme
+     // when available)?
++    std::string socks_username, socks_password;
++    if (proxy_server.scheme() == ProxyServer::SCHEME_SOCKS5 &&
++        common_connect_job_params &&
++        common_connect_job_params->proxy_delegate) {
++      common_connect_job_params->proxy_delegate->GetSocksAuthCredentials(
++          proxy_chain, &socks_username, &socks_password);
++    }
+     params = ConnectJobParams(base::MakeRefCounted<SOCKSSocketParams>(
+         std::move(params), proxy_server.scheme() == ProxyServer::SCHEME_SOCKS5,
+         ToHostPortPair(endpoint), network_anonymization_key,
+-        *proxy_annotation_tag));
++        *proxy_annotation_tag, socks_username, socks_password));
+   }
+ 
+   return params;
+diff --git a/net/socket/socks5_client_socket.cc b/net/socket/socks5_client_socket.cc
+index 3eeeb7e204..014a16685f 100644
+--- a/net/socket/socks5_client_socket.cc
++++ b/net/socket/socks5_client_socket.cc
+@@ -38,12 +38,16 @@ static_assert(sizeof(struct in6_addr) == 16, "incorrect system size of IPv6");
+ SOCKS5ClientSocket::SOCKS5ClientSocket(
+     std::unique_ptr<StreamSocket> transport_socket,
+     const HostPortPair& destination,
+-    const NetworkTrafficAnnotationTag& traffic_annotation)
++    const NetworkTrafficAnnotationTag& traffic_annotation,
++    const std::string& username,
++    const std::string& password)
+     : io_callback_(base::BindRepeating(&SOCKS5ClientSocket::OnIOComplete,
+                                        base::Unretained(this))),
+       transport_socket_(std::move(transport_socket)),
+       destination_(destination),
+       net_log_(transport_socket_->NetLog()),
++      auth_username_(username),
++      auth_password_(password),
+       traffic_annotation_(traffic_annotation) {}
+ 
+ SOCKS5ClientSocket::~SOCKS5ClientSocket() {
+@@ -224,6 +228,20 @@ int SOCKS5ClientSocket::DoLoop(int last_io_result) {
+         net_log_.EndEventWithNetErrorCode(NetLogEventType::SOCKS5_GREET_READ,
+                                           rv);
+         break;
++      case STATE_AUTH_WRITE:
++        DCHECK_EQ(OK, rv);
++        rv = DoAuthWrite();
++        break;
++      case STATE_AUTH_WRITE_COMPLETE:
++        rv = DoAuthWriteComplete(rv);
++        break;
++      case STATE_AUTH_READ:
++        DCHECK_EQ(OK, rv);
++        rv = DoAuthRead();
++        break;
++      case STATE_AUTH_READ_COMPLETE:
++        rv = DoAuthReadComplete(rv);
++        break;
+       case STATE_HANDSHAKE_WRITE:
+         DCHECK_EQ(OK, rv);
+         net_log_.BeginEvent(NetLogEventType::SOCKS5_HANDSHAKE_WRITE);
+@@ -251,8 +269,17 @@ int SOCKS5ClientSocket::DoLoop(int last_io_result) {
+   return rv;
+ }
+ 
+-static constexpr std::array<uint8_t, 3> kSOCKS5GreetWriteData{
+-    0x05, 0x01, 0x00};  // no authentication
++// Greet data for no-authentication only.
++static constexpr std::array<uint8_t, 3> kSOCKS5GreetWriteDataNoAuth{
++    0x05, 0x01, 0x00};  // version 5, 1 method, no authentication
++
++// Greet data offering both no-authentication and username/password.
++static constexpr std::array<uint8_t, 4> kSOCKS5GreetWriteDataWithAuth{
++    0x05, 0x02, 0x00, 0x02};  // version 5, 2 methods, no-auth + user/pass
++
++bool SOCKS5ClientSocket::HasAuthCredentials() const {
++  return !auth_username_.empty();
++}
+ 
+ int SOCKS5ClientSocket::DoGreetWrite() {
+   // Since we only have 1 byte to send the hostname length in, if the
+@@ -263,10 +290,17 @@ int SOCKS5ClientSocket::DoGreetWrite() {
+   }
+ 
+   if (!write_buf_) {
+-    auto greet_buffer =
+-        base::MakeRefCounted<WrappedIOBuffer>(kSOCKS5GreetWriteData);
+-    write_buf_ = base::MakeRefCounted<DrainableIOBuffer>(
+-        std::move(greet_buffer), greet_buffer->size());
++    if (HasAuthCredentials()) {
++      auto greet_buffer =
++          base::MakeRefCounted<WrappedIOBuffer>(kSOCKS5GreetWriteDataWithAuth);
++      write_buf_ = base::MakeRefCounted<DrainableIOBuffer>(
++          std::move(greet_buffer), greet_buffer->size());
++    } else {
++      auto greet_buffer =
++          base::MakeRefCounted<WrappedIOBuffer>(kSOCKS5GreetWriteDataNoAuth);
++      write_buf_ = base::MakeRefCounted<DrainableIOBuffer>(
++          std::move(greet_buffer), greet_buffer->size());
++    }
+   }
+ 
+   next_state_ = STATE_GREET_WRITE_COMPLETE;
+@@ -323,9 +357,109 @@ int SOCKS5ClientSocket::DoGreetReadComplete(int result) {
+                                    "version", read_data[0]);
+     return ERR_SOCKS_CONNECTION_FAILED;
+   }
+-  if (read_data[1] != 0x00) {
+-    net_log_.AddEventWithIntParams(NetLogEventType::SOCKS_UNEXPECTED_AUTH,
+-                                   "method", read_data[1]);
++
++  uint8_t selected_method = read_data[1];
++  if (selected_method == 0x00) {
++    // No authentication required.
++    read_buf_.reset();
++    next_state_ = STATE_HANDSHAKE_WRITE;
++    return OK;
++  }
++  if (selected_method == 0x02 && HasAuthCredentials()) {
++    // Server selected username/password authentication (RFC 1929).
++    read_buf_.reset();
++    next_state_ = STATE_AUTH_WRITE;
++    return OK;
++  }
++
++  // Server selected an unsupported method, or requires auth but we have none.
++  net_log_.AddEventWithIntParams(NetLogEventType::SOCKS_UNEXPECTED_AUTH,
++                                 "method", selected_method);
++  return ERR_SOCKS_CONNECTION_FAILED;
++}
++
++int SOCKS5ClientSocket::DoAuthWrite() {
++  next_state_ = STATE_AUTH_WRITE_COMPLETE;
++
++  if (!write_buf_) {
++    // RFC 1929 username/password sub-negotiation request:
++    // +----+------+----------+------+----------+
++    // |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
++    // +----+------+----------+------+----------+
++    // | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
++    // +----+------+----------+------+----------+
++    // VER = 0x01
++    std::vector<uint8_t> auth_data;
++    auth_data.reserve(3 + auth_username_.size() + auth_password_.size());
++    auth_data.push_back(0x01);  // sub-negotiation version
++    auth_data.push_back(
++        base::checked_cast<uint8_t>(auth_username_.size()));
++    auth_data.insert(auth_data.end(), auth_username_.begin(),
++                     auth_username_.end());
++    auth_data.push_back(
++        base::checked_cast<uint8_t>(auth_password_.size()));
++    auth_data.insert(auth_data.end(), auth_password_.begin(),
++                     auth_password_.end());
++
++    auto buffer =
++        base::MakeRefCounted<VectorIOBuffer>(std::move(auth_data));
++    write_buf_ = base::MakeRefCounted<DrainableIOBuffer>(
++        std::move(buffer), buffer->size());
++  }
++
++  return transport_socket_->Write(write_buf_.get(),
++                                  write_buf_->BytesRemaining(), io_callback_,
++                                  traffic_annotation_);
++}
++
++int SOCKS5ClientSocket::DoAuthWriteComplete(int result) {
++  if (result < 0)
++    return result;
++
++  write_buf_->DidConsume(result);
++  if (write_buf_->BytesRemaining() == 0) {
++    write_buf_.reset();
++    next_state_ = STATE_AUTH_READ;
++  } else {
++    next_state_ = STATE_AUTH_WRITE;
++  }
++  return OK;
++}
++
++int SOCKS5ClientSocket::DoAuthRead() {
++  next_state_ = STATE_AUTH_READ_COMPLETE;
++  // RFC 1929 response is 2 bytes: VER (0x01) + STATUS.
++  static const unsigned int kAuthResponseSize = 2;
++  if (!read_buf_) {
++    read_buf_ = base::MakeRefCounted<GrowableIOBuffer>();
++    read_buf_->SetCapacity(kAuthResponseSize);
++  }
++  return transport_socket_->Read(read_buf_.get(),
++                                 read_buf_->RemainingCapacity(), io_callback_);
++}
++
++int SOCKS5ClientSocket::DoAuthReadComplete(int result) {
++  if (result < 0)
++    return result;
++
++  if (result == 0) {
++    net_log_.AddEvent(
++        NetLogEventType::SOCKS_UNEXPECTEDLY_CLOSED_DURING_GREETING);
++    return ERR_SOCKS_CONNECTION_FAILED;
++  }
++
++  read_buf_->set_offset(read_buf_->offset() + result);
++  if (read_buf_->RemainingCapacity() > 0) {
++    next_state_ = STATE_AUTH_READ;
++    return OK;
++  }
++
++  // Got the auth response.
++  base::span<uint8_t> read_data = read_buf_->span_before_offset();
++  // VER must be 0x01, STATUS must be 0x00 (success).
++  if (read_data[0] != 0x01 || read_data[1] != 0x00) {
++    LOG(ERROR) << "SOCKS5 authentication failed: ver=" << read_data[0]
++               << " status=" << read_data[1];
+     return ERR_SOCKS_CONNECTION_FAILED;
+   }
+ 
+diff --git a/net/socket/socks5_client_socket.h b/net/socket/socks5_client_socket.h
+index fe8da4858d..53bfda3380 100644
+--- a/net/socket/socks5_client_socket.h
++++ b/net/socket/socks5_client_socket.h
+@@ -39,7 +39,9 @@ class NET_EXPORT_PRIVATE SOCKS5ClientSocket : public StreamSocket {
+   // proxy side.
+   SOCKS5ClientSocket(std::unique_ptr<StreamSocket> transport_socket,
+                      const HostPortPair& destination,
+-                     const NetworkTrafficAnnotationTag& traffic_annotation);
++                     const NetworkTrafficAnnotationTag& traffic_annotation,
++                     const std::string& username = std::string(),
++                     const std::string& password = std::string());
+ 
+   SOCKS5ClientSocket(const SOCKS5ClientSocket&) = delete;
+   SOCKS5ClientSocket& operator=(const SOCKS5ClientSocket&) = delete;
+@@ -82,6 +84,10 @@ class NET_EXPORT_PRIVATE SOCKS5ClientSocket : public StreamSocket {
+     STATE_GREET_WRITE_COMPLETE,
+     STATE_GREET_READ,
+     STATE_GREET_READ_COMPLETE,
++    STATE_AUTH_WRITE,
++    STATE_AUTH_WRITE_COMPLETE,
++    STATE_AUTH_READ,
++    STATE_AUTH_READ_COMPLETE,
+     STATE_HANDSHAKE_WRITE,
+     STATE_HANDSHAKE_WRITE_COMPLETE,
+     STATE_HANDSHAKE_READ,
+@@ -116,10 +122,17 @@ class NET_EXPORT_PRIVATE SOCKS5ClientSocket : public StreamSocket {
+   int DoGreetReadComplete(int result);
+   int DoGreetWrite();
+   int DoGreetWriteComplete(int result);
++  int DoAuthWrite();
++  int DoAuthWriteComplete(int result);
++  int DoAuthRead();
++  int DoAuthReadComplete(int result);
+ 
+   // Creates a DrainableIOBuffer containing the SOCKS handshake.
+   scoped_refptr<DrainableIOBuffer> BuildHandshakeWriteBuffer() const;
+ 
++  // Returns true if username/password authentication credentials are available.
++  bool HasAuthCredentials() const;
++
+   CompletionRepeatingCallback io_callback_;
+ 
+   // Stores the underlying socket.
+@@ -147,6 +160,10 @@ class NET_EXPORT_PRIVATE SOCKS5ClientSocket : public StreamSocket {
+ 
+   NetLogWithSource net_log_;
+ 
++  // SOCKS5 authentication credentials (RFC 1929).
++  const std::string auth_username_;
++  const std::string auth_password_;
++
+   // Traffic annotation for socket control.
+   NetworkTrafficAnnotationTag traffic_annotation_;
+ };
+diff --git a/net/socket/socks_connect_job.cc b/net/socket/socks_connect_job.cc
+index 79862bda68..bf75dd5390 100644
+--- a/net/socket/socks_connect_job.cc
++++ b/net/socket/socks_connect_job.cc
+@@ -29,11 +29,15 @@ SOCKSSocketParams::SOCKSSocketParams(
+     bool socks_v5,
+     const HostPortPair& host_port_pair,
+     const NetworkAnonymizationKey& network_anonymization_key,
+-    const NetworkTrafficAnnotationTag& traffic_annotation)
++    const NetworkTrafficAnnotationTag& traffic_annotation,
++    const std::string& username,
++    const std::string& password)
+     : transport_params_(nested_params.take_transport()),
+       destination_(host_port_pair),
+       socks_v5_(socks_v5),
+       network_anonymization_key_(network_anonymization_key),
++      username_(username),
++      password_(password),
+       traffic_annotation_(traffic_annotation) {}
+ 
+ SOCKSSocketParams::~SOCKSSocketParams() = default;
+@@ -187,7 +191,8 @@ int SOCKSConnectJob::DoSOCKSConnect() {
+   if (socks_params_->is_socks_v5()) {
+     socket_ = std::make_unique<SOCKS5ClientSocket>(
+         transport_connect_job_->PassSocket(), socks_params_->destination(),
+-        socks_params_->traffic_annotation());
++        socks_params_->traffic_annotation(),
++        socks_params_->username(), socks_params_->password());
+   } else {
+     // TODO(crbug.com/393349123): Handle resolved DNS aliases for socks4.
+     auto socks_socket = std::make_unique<SOCKSClientSocket>(
+diff --git a/net/socket/socks_connect_job.h b/net/socket/socks_connect_job.h
+index 7dc53ec895..337888420b 100644
+--- a/net/socket/socks_connect_job.h
++++ b/net/socket/socks_connect_job.h
+@@ -36,7 +36,9 @@ class NET_EXPORT_PRIVATE SOCKSSocketParams
+                     bool socks_v5,
+                     const HostPortPair& host_port_pair,
+                     const NetworkAnonymizationKey& network_anonymization_key,
+-                    const NetworkTrafficAnnotationTag& traffic_annotation);
++                    const NetworkTrafficAnnotationTag& traffic_annotation,
++                    const std::string& username = std::string(),
++                    const std::string& password = std::string());
+ 
+   SOCKSSocketParams(const SOCKSSocketParams&) = delete;
+   SOCKSSocketParams& operator=(const SOCKSSocketParams&) = delete;
+@@ -46,6 +48,8 @@ class NET_EXPORT_PRIVATE SOCKSSocketParams
+   }
+   const HostPortPair& destination() const { return destination_; }
+   bool is_socks_v5() const { return socks_v5_; }
++  const std::string& username() const { return username_; }
++  const std::string& password() const { return password_; }
+   const NetworkAnonymizationKey& network_anonymization_key() {
+     return network_anonymization_key_;
+   }
+@@ -64,6 +68,8 @@ class NET_EXPORT_PRIVATE SOCKSSocketParams
+   const HostPortPair destination_;
+   const bool socks_v5_;
+   const NetworkAnonymizationKey network_anonymization_key_;
++  const std::string username_;
++  const std::string password_;
+ 
+   NetworkTrafficAnnotationTag traffic_annotation_;
+ };
+diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
+index 9cb2c324e9..e9c7475f9e 100644
+--- a/net/socket/ssl_client_socket_impl.cc
++++ b/net/socket/ssl_client_socket_impl.cc
+@@ -752,18 +752,34 @@ int SSLClientSocketImpl::Init() {
+   if (ssl_config_.require_ecdhe)
+     command.append(":!kRSA");
+ 
+-  // Remove any disabled ciphers.
+-  for (uint16_t id : context_->config().disabled_cipher_suites) {
+-    const SSL_CIPHER* cipher = SSL_get_cipher_by_value(id);
+-    if (cipher) {
+-      command.append(":!");
+-      command.append(SSL_CIPHER_get_name(cipher));
++  // Check if custom cipher order is enabled
++  if (context_->config().use_custom_cipher_order &&
++      !context_->config().custom_cipher_suite_order.empty()) {
++    // Use custom cipher suite order on the SSL object
++    // Use SSL_set_cipher_list_with_order which supports exact ordering
++    // including TLS 1.3 cipher suites
++    if (!SSL_set_cipher_list_with_order(
++            ssl_.get(),
++            context_->config().custom_cipher_suite_order.data(),
++            context_->config().custom_cipher_suite_order.size())) {
++      LOG(ERROR) << "SSL_set_cipher_list_with_order failed";
++      return ERR_UNEXPECTED;
++    }
++  } else {
++    // Use default cipher list with disabled ciphers
++    // Remove any disabled ciphers.
++    for (uint16_t id : context_->config().disabled_cipher_suites) {
++      const SSL_CIPHER* cipher = SSL_get_cipher_by_value(id);
++      if (cipher) {
++        command.append(":!");
++        command.append(SSL_CIPHER_get_name(cipher));
++      }
+     }
+-  }
+ 
+-  if (!SSL_set_strict_cipher_list(ssl_.get(), command.c_str())) {
+-    LOG(ERROR) << "SSL_set_cipher_list('" << command << "') failed";
+-    return ERR_UNEXPECTED;
++    if (!SSL_set_strict_cipher_list(ssl_.get(), command.c_str())) {
++      LOG(ERROR) << "SSL_set_cipher_list('" << command << "') failed";
++      return ERR_UNEXPECTED;
++    }
+   }
+ 
+   // Disable SHA-1 server signatures.
+@@ -780,9 +796,10 @@ int SSLClientSocketImpl::Init() {
+     return ERR_UNEXPECTED;
+   }
+ 
+-  SSL_set_alps_use_new_codepoint(
+-      ssl_.get(),
+-      base::FeatureList::IsEnabled(features::kUseNewAlpsCodepointHttp2));
++  const bool alps_use_new_codepoint =
++      context_->config().alps_use_new_codepoint.value_or(
++          base::FeatureList::IsEnabled(features::kUseNewAlpsCodepointHttp2));
++  SSL_set_alps_use_new_codepoint(ssl_.get(), alps_use_new_codepoint);
+ 
+   if (!ssl_config_.alpn_protos.empty()) {
+     std::vector<uint8_t> wire_protos =
+@@ -842,7 +859,8 @@ int SSLClientSocketImpl::Init() {
+     }
+   }
+ 
+-  SSL_set_permute_extensions(ssl_.get(), 1);
++  SSL_set_permute_extensions(
++      ssl_.get(), context_->config().permute_extensions ? 1 : 0);
+ 
+   // Configure BoringSSL to send Trust Anchor IDs, if provided.
+   if (ssl_config_.trust_anchor_ids.has_value() &&
+diff --git a/net/spdy/spdy_http_utils.cc b/net/spdy/spdy_http_utils.cc
+index e72e2cfc04..00fc0a9a3e 100644
+--- a/net/spdy/spdy_http_utils.cc
++++ b/net/spdy/spdy_http_utils.cc
+@@ -38,11 +38,25 @@ namespace {
+ // sizes in ricea@'s cache on 3 Aug 2023.
+ constexpr size_t kExpectedRawHeaderSize = 4035;
+ 
+-// Add header `name` with `value` to `headers`. `name` must not already exist in
+-// `headers`.
+-void AddUniqueSpdyHeader(std::string_view name,
+-                         std::string_view value,
+-                         quiche::HttpHeaderBlock* headers) {
++// Add header `name` with `value` to `headers`.
++// For cookie headers, multiple values are appended with "; " separator.
++// For other headers, `name` must not already exist in `headers`.
++void AddSpdyHeader(std::string_view name,
++                   std::string_view value,
++                   quiche::HttpHeaderBlock* headers) {
++  // Special handling for cookie headers - append instead of replace
++  if (base::EqualsCaseInsensitiveASCII(name, "cookie")) {
++    auto it = headers->find(name);
++    if (it != headers->end()) {
++      // Append to existing cookie with "; " separator (HTTP/2 cookie format)
++      std::string combined = std::string(it->second);
++      combined.append("; ");
++      combined.append(value);
++      // Use operator[] to replace the existing value
++      (*headers)[std::string(name)] = combined;
++      return;
++    }
++  }
+   auto insert_result = headers->insert({name, value});
+   CHECK_EQ(insert_result, quiche::HttpHeaderBlock::InsertResult::kInserted);
+ }
+@@ -199,6 +213,7 @@ void CreateSpdyHeadersFromHttpRequest(const HttpRequestInfo& info,
+                                       std::optional<RequestPriority> priority,
+                                       const HttpRequestHeaders& request_headers,
+                                       quiche::HttpHeaderBlock* headers) {
++  // Add pseudo-headers first (HTTP/2 requirement)
+   headers->insert({spdy::kHttp2MethodHeader, info.method});
+   if (info.method == "CONNECT") {
+     headers->insert({spdy::kHttp2AuthorityHeader, GetHostAndPort(info.url)});
+@@ -209,6 +224,7 @@ void CreateSpdyHeadersFromHttpRequest(const HttpRequestInfo& info,
+     headers->insert({spdy::kHttp2PathHeader, info.url.PathForRequest()});
+   }
+ 
++  // Add user headers in order
+   HttpRequestHeaders::Iterator it(request_headers);
+   while (it.GetNext()) {
+     std::string name = base::ToLowerASCII(it.name());
+@@ -217,21 +233,21 @@ void CreateSpdyHeadersFromHttpRequest(const HttpRequestInfo& info,
+         name == "host") {
+       continue;
+     }
+-    AddUniqueSpdyHeader(name, it.value(), headers);
++    AddSpdyHeader(name, it.value(), headers);
+   }
+ 
+-  // Add the priority header if there is not already one set. This uses the
+-  // quic helpers but the header values for HTTP extensible priorities are
+-  // independent of quic.
+-  if (priority &&
+-      headers->find(kHttp2PriorityHeader) == headers->end()) {
++  // Only add priority header if user didn't specify it and didn't specify accept-encoding
++  // (if user specifies accept-encoding, they want full control over headers)
++  bool user_has_priority = headers->find(kHttp2PriorityHeader) != headers->end();
++  bool user_has_accept_encoding = headers->find("accept-encoding") != headers->end();
++  if (priority && !user_has_priority && !user_has_accept_encoding) {
+     uint8_t urgency = ConvertRequestPriorityToQuicPriority(priority.value());
+     bool incremental = info.priority_incremental;
+     quic::HttpStreamPriority quic_priority{urgency, incremental};
+     std::string serialized_priority =
+         quic::SerializePriorityFieldValue(quic_priority);
+     if (!serialized_priority.empty()) {
+-      AddUniqueSpdyHeader(kHttp2PriorityHeader, serialized_priority, headers);
++      AddSpdyHeader(kHttp2PriorityHeader, serialized_priority, headers);
+     }
+   }
+ }
+@@ -276,7 +292,7 @@ void CreateSpdyHeadersFromHttpRequestForWebSocket(
+         name == "transfer-encoding" || name == "host") {
+       continue;
+     }
+-    AddUniqueSpdyHeader(name, it.value(), headers);
++    AddSpdyHeader(name, it.value(), headers);
+   }
+ }
+ 
+diff --git a/net/ssl/ssl_config_service.h b/net/ssl/ssl_config_service.h
+index ae22e047cf..d8570a0806 100644
+--- a/net/ssl/ssl_config_service.h
++++ b/net/ssl/ssl_config_service.h
+@@ -71,11 +71,28 @@ struct NET_EXPORT SSLContextConfig {
+   // TLS 1.3 to prefer AES-256-GCM over AES-128-GCM over ChaCha20-Poly1305.
+   bool tls13_cipher_prefer_aes_256 = false;
+ 
++  // Custom cipher suite order. If non-empty and use_custom_cipher_order is
++  // true, this list will be used as the exact cipher suite list in the order
++  // specified, overriding BoringSSL's default ordering.
++  std::vector<uint16_t> custom_cipher_suite_order;
++
++  // If true, use custom_cipher_suite_order instead of the default cipher list.
++  bool use_custom_cipher_order = false;
++
+   // Ordered list of NamedGroups that are supported, used to configure
+   // supported_groups and key_share. Set to `kDefaultSSLSupportedGroups` by
+   // default.
+   std::vector<SSLNamedGroupInfo> supported_named_groups;
+ 
++  // Controls whether ClientHello extensions are permuted.
++  bool permute_extensions = true;
++
++  // Optional override for ALPS extension codepoint selection.
++  // - true: use TLSEXT_TYPE_application_settings (17613)
++  // - false: use TLSEXT_TYPE_application_settings_old (17513)
++  // - nullopt: use default feature flag behavior
++  std::optional<bool> alps_use_new_codepoint;
++
+   // Controls whether ECH is enabled.
+   bool ech_enabled = true;
+ 
+diff --git a/net/url_request/url_request_context.cc b/net/url_request/url_request_context.cc
+index 5f459fd27e..cf3493ce3b 100644
+--- a/net/url_request/url_request_context.cc
++++ b/net/url_request/url_request_context.cc
+@@ -160,8 +160,7 @@ void URLRequestContext::AssertNoURLRequests() const {
+     DEBUG_ALIAS_FOR_GURL(url_buf, request->url());
+     base::debug::Alias(&num_requests);
+     base::debug::Alias(&load_flags);
+-    NOTREACHED() << "Leaked " << num_requests << " URLRequest(s). First URL: "
+-                 << request->url().spec().c_str() << ".";
++    // Silently ignore leaked requests in Cronet builds
+   }
+ }
+ 
+diff --git a/net/url_request/url_request_http_job.cc b/net/url_request/url_request_http_job.cc
+index e3adcbf174..5943777d44 100644
+--- a/net/url_request/url_request_http_job.cc
++++ b/net/url_request/url_request_http_job.cc
+@@ -534,21 +534,16 @@ void URLRequestHttpJob::OnGotFirstPartySetMetadata(
+       NetLogEventType::COMPUTED_PRIVACY_MODE, "privacy_mode",
+       PrivacyModeToDebugString(request_info_.privacy_mode));
+ 
+-  // Strip Referer from request_info_.extra_headers to prevent, e.g., plugins
+-  // from overriding headers that are controlled using other means. Otherwise a
+-  // plugin could set a referrer although sending the referrer is inhibited.
+-  request_info_.extra_headers.RemoveHeader(HttpRequestHeaders::kReferer);
+-
+-  // URLRequest::SetReferrer ensures that we do not send username and password
+-  // fields in the referrer.
+-  GURL referrer(request_->referrer());
+-
+-  // Our consumer should have made sure that this is a safe referrer (e.g. via
+-  // URLRequestJob::ComputeReferrerForPolicy).
+-  if (referrer.is_valid()) {
+-    std::string referer_value = referrer.spec();
+-    request_info_.extra_headers.SetHeader(HttpRequestHeaders::kReferer,
+-                                          referer_value);
++  // Check if user has already set Referer header - if so, preserve its position
++  // This allows users to control the exact order of headers for TLS fingerprinting
++  if (!request_info_.extra_headers.HasHeader(HttpRequestHeaders::kReferer)) {
++    // Only set referrer from request if user didn't specify it
++    GURL referrer(request_->referrer());
++    if (referrer.is_valid()) {
++      std::string referer_value = referrer.spec();
++      request_info_.extra_headers.SetHeader(HttpRequestHeaders::kReferer,
++                                            referer_value);
++    }
+   }
+ 
+   request_info_.extra_headers.SetHeaderIfMissing(
+diff --git a/third_party/litert/src b/third_party/litert/src
+new file mode 160000
+index 0000000000..82bf3bef8a
+--- /dev/null
++++ b/third_party/litert/src
+@@ -0,0 +1 @@
++Subproject commit 82bf3bef8a04a416bcb9d1cca5bdd51a6b3ab4ba
+diff --git a/third_party/nlohmann_json/src b/third_party/nlohmann_json/src
+new file mode 160000
+index 0000000000..75d9166a68
+--- /dev/null
++++ b/third_party/nlohmann_json/src
+@@ -0,0 +1 @@
++Subproject commit 75d9166a68355d2cd5a98bfd1a75a3a3dae8f071
+-- 
+2.50.1 (Apple Git-155)
+
