@@ -821,7 +821,8 @@ session.close()
 
 ```python
 # Recommended: via session.websocket()
-ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None)
+ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None,
+                       headers=None, origin=None, sub_protocols=None)
 ```
 
 | Parameter | Type | Description |
@@ -840,13 +841,13 @@ ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_
 | `ws.send(text)` | Send a text message |
 | `ws.send_bytes(data)` | Send a binary message |
 | `ws.close(code=1000, reason="")` | Graceful close |
-| `ws.stop()` | Force-stop the event loop |
-| `ws.run_forever()` | Block and run the event loop |
-| `ws.run_in_background()` | Run in background thread, returns Thread object |
+| `ws.stop()` | Start the closing handshake and stop the event loop |
+| `ws.run_forever(blocking=True, recv_timeout_ms=500)` | Run the event loop, blocking the calling thread by default |
+| `ws.run_in_background(daemon=True, recv_timeout_ms=500)` | Run in background thread, returns Thread object |
 | `ws.wait(timeout=None)` | Wait for background thread to finish |
 | `ws.connected` | Property, whether currently connected |
 
-## �� Advanced Configuration
+## 🔧 Advanced Configuration
 
 ### SSL Certificate Verification
 

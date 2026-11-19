@@ -1,0 +1,63 @@
+From a63cc5c83b19a2c8d7632b836d396a2e71b309f9 Mon Sep 17 00:00:00 2001
+From: chenkaipeng <2833844911@qq.com>
+Date: Sat, 9 May 2026 00:38:19 +0800
+Subject: [PATCH 3/4] WebSocket: add ReadFrames() after open, fix DoDestroy
+ with closing handshake, add logging
+
+---
+ components/cronet/native/cronet_websocket.cc | 25 ++++++++++++++++----
+ 1 file changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/components/cronet/native/cronet_websocket.cc b/components/cronet/native/cronet_websocket.cc
+index 74966407ac..2e796623f6 100644
+--- a/components/cronet/native/cronet_websocket.cc
++++ b/components/cronet/native/cronet_websocket.cc
+@@ -301,10 +301,22 @@ void CronetWebSocket::Destroy() {
+ }
+ 
+ void CronetWebSocket::DoDestroy() {
+-  // Runs on the network thread. Destroy the channel first, which
+-  // destroys the bridge. The bridge's destructor is safe since
+-  // the bridge never deletes the owner.
+-  channel_.reset();
++  // Runs on the network thread.
++  if (channel_) {
++    // If the connection is still open, start a closing handshake so
++    // the underlying socket is returned to the pool properly.
++    bool was_connected = false;
++    {
++      base::AutoLock lock(lock_);
++      was_connected = connected_ && !closing_;
++    }
++    if (was_connected) {
++      std::ignore = channel_->StartClosingHandshake(
++          1000, "going away");
++    }
++    // Destroy the channel (which destroys the bridge).
++    channel_.reset();
++  }
+   destroy_done_.Signal();
+ }
+ 
+@@ -355,6 +367,8 @@ void CronetWebSocket::OnClose(bool was_clean, uint16_t code,
+ }
+ 
+ void CronetWebSocket::OnFail(const std::string& message, int net_error) {
++  LOG(ERROR) << "CronetWebSocket::OnFail: " << message
++             << ", net_error=" << net_error;
+   {
+     base::AutoLock lock(lock_);
+     connected_ = false;
+@@ -368,7 +382,8 @@ void CronetWebSocket::OnFail(const std::string& message, int net_error) {
+ void CronetWebSocket::OnSSLError(
+     std::unique_ptr<net::WebSocketEventInterface::SSLErrorCallbacks> cbs,
+     bool fatal) {
+-  // Accept all certs for now.
++  LOG(WARNING) << "CronetWebSocket::OnSSLError called, fatal=" << fatal;
++  // Accept all certs.
+   cbs->ContinueSSLRequest();
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

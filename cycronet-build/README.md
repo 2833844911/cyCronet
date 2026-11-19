@@ -43,6 +43,66 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 
 Cycronet 直接使用 Chromium 的 Cronet 网络库，产生的所有网络特征与真实 Chrome 浏览器**完全一致**，无法被检测出是爬虫。
 
+## 🚀 cyCronet 152.0.1 快速使用
+
+当前本地构建版本是 `152.0.1`，默认 TLS profile 是 `chrome_152`。正常使用时不需要手动传 `chrometls`，它会自动读取包内 `python/cycronet/tls_profiles.json` 的 `chrome_152` 配置。
+
+### 安装本地编译好的 wheel
+
+```bash
+# 如果使用 conda，先进入你的环境：conda activate <env_name>
+python -m pip install --force-reinstall /Volumes/D/myxm/cyCronet/cycronet-build/target/wheels/cycronet-150.1.0-cp38-abi3-macosx_11_0_arm64.whl
+```
+
+### 默认请求方式
+
+```python
+import cycronet
+
+response = cycronet.get("https://tls.peet.ws/api/all", verify=False)
+data = response.json()
+
+print(data["http2"]["akamai_fingerprint"])
+print(data["http2"]["akamai_fingerprint_hash"])
+```
+
+### 显式指定 chrome_152
+
+```python
+import cycronet
+
+with cycronet.CronetClient(verify=False, chrometls="chrome_152") as session:
+    response = session.get("https://tls.peet.ws/api/all")
+    print(response.json()["http2"]["akamai_fingerprint"])
+```
+
+### 验证 signature_algorithms
+
+```python
+import cycronet
+
+response = cycronet.get("https://tls.tsvmp.com:38080/cbbiyhh", verify=False)
+print(response.text)
+```
+
+如果页面里 `name: signature_algorithms (13)` 下方顺序如下，说明 `chrome_152` 配置已经生效
+（`chrome_150` 除了没有开头的 GREASE 值 `Unknown(0x0a0a)` 之外，其余顺序相同）：
+
+```text
+- Unknown(0x0a0a)
+- Unknown(0x0904)
+- Unknown(0x0905)
+- Unknown(0x0906)
+- ecdsa_secp256r1_sha256
+- rsa_pss_rsae_sha256
+- rsa_pkcs1_sha256
+- Unknown(0x0503)
+- rsa_pss_rsae_sha384
+- rsa_pkcs1_sha384
+- rsa_pss_rsae_sha512
+- Unknown(0x0601)
+```
+
 ## 🔐 TLS/HTTP2 指纹绕过
 
 ### 真实的 Chrome 指纹
@@ -90,13 +150,13 @@ response = requests.get('https://example.com')
 # ✅ cycronet 同步 - 真实 Chrome 指纹
 import cycronet
 response = cycronet.get('https://example.com', verify=False)
-# TLS 指纹：Chrome 144.x
+# TLS 指纹：Chrome 150.x
 # HTTP/2：完全符合 Chrome 行为
 
 # ✅ cycronet 异步 - 真实 Chrome 指纹 + 高性能
 import asyncio
 response = await cycronet.async_get('https://example.com', verify=False)
-# TLS 指纹：Chrome 144.x
+# TLS 指纹：Chrome 150.x
 # HTTP/2：完全符合 Chrome 行为
 # 性能：支持并发，速度提升 5-10 倍
 ```
@@ -110,11 +170,11 @@ import cycronet
 response = cycronet.get(
     'https://cloudflare-protected-site.com',
     headers={
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate, br',
-        'sec-ch-ua': '"Chromium";v="144", "Not A(Brand";v="99"',
+        'sec-ch-ua': '"Chromium";v="150", "Not A(Brand";v="99"',
         'sec-ch-ua-mobile': '?0',
         'sec-ch-ua-platform': '"Windows"',
         'Sec-Fetch-Dest': 'document',
@@ -136,10 +196,10 @@ Cycronet 支持自定义 TLS 指纹配置，可以模拟特定版本的 Chrome �
 ```python
 import cycronet
 
-# 使用 Chrome 144 的 TLS 指纹配置
+# 使用 Chrome 150 的 TLS 指纹配置
 session = cycronet.CronetClient(
     verify=False,
-    chrometls="chrome_144"  # 指定 TLS 配置
+    chrometls="chrome_150"  # 指定 TLS 配置
 )
 
 response = session.get('https://tls.peet.ws/api/all')
@@ -150,48 +210,93 @@ session.close()
 session = cycronet.CronetClient(
     verify=False,
     proxies={'https': 'http://127.0.0.1:21882'},
-    chrometls="chrome_144"
+    chrometls="chrome_150"
 )
 ```
 
 **支持的 TLS 配置：**
-- `chrome_144`: Chrome 144 版本的 TLS 指纹（默认）
+- `chrome_152`: Chrome 152 版本的 TLS 指纹（默认，带 `trust_anchors` 扩展和 GREASE signature algorithm）
+- `chrome_150`: Chrome 150 版本的 TLS 指纹
+- `chrome_144` / `chrome_145` / `chrome_146` / `chrome_147` / `chrome_133` / `chrome_126`: 用于回退或对比测试
 
 #### 添加自定义 TLS 配置
 
-##### 使用 set_tls_profiles() 函数
+##### 使用 add_tls_profile() 函数（推荐）
 ```python
 import cycronet
 
-# 更友好的 API，功能相同
+# 基于内置 chrome_150 增加一个自定义 profile
+profile = cycronet.get_tls_profiles()["chrome_150"].copy()
+profile["signature_algorithms"] = [
+    "0x0904",
+    "0x0905",
+    "0x0906",
+    "ecdsa_secp256r1_sha256",
+    "rsa_pss_rsae_sha256",
+    "rsa_pkcs1_sha256",
+    "0x0503",
+    "rsa_pss_rsae_sha384",
+    "rsa_pkcs1_sha384",
+    "rsa_pss_rsae_sha512",
+    "0x0601",
+]
+
+cycronet.add_tls_profile("chrome_150_custom", profile)
+
+session = cycronet.CronetClient(verify=False, chrometls="chrome_150_custom")
+```
+
+`set_tls_profiles()` 也可以使用，但它会替换当前进程内的全部 profile：
+
+```python
+import cycronet
+
 cycronet.set_tls_profiles({
-    "chrome_test": {
-        "cipher_suites": ["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"],
-        "tls_curves": ["X25519"],
-        "tls_extensions": []
+    "chrome_150_custom": {
+        "version": "Chrome 150 custom",
+        "cipher_suites": [
+            "TLS_GREASE",
+            "TLS_AES_128_GCM_SHA256",
+            "TLS_AES_256_GCM_SHA384",
+            "TLS_CHACHA20_POLY1305_SHA256"
+        ],
+        "tls_curves": ["X25519MLKEM768", "X25519", "P-256", "P-384"],
+        "tls_extensions": [],
+        "signature_algorithms": [
+            "0x0904",
+            "0x0905",
+            "0x0906",
+            "ecdsa_secp256r1_sha256",
+            "rsa_pss_rsae_sha256",
+            "rsa_pkcs1_sha256",
+            "0x0503",
+            "rsa_pss_rsae_sha384",
+            "rsa_pkcs1_sha384",
+            "rsa_pss_rsae_sha512",
+            "0x0601"
+        ]
     }
 })
 
-session = cycronet.CronetClient(chrometls="chrome_test")
-
+session = cycronet.CronetClient(verify=False, chrometls="chrome_150_custom")
 ```
 
 ##### 你可以通过编辑 `tls_profiles.json` 文件来添加自定义的 TLS 指纹配置。
 
 **1. 找到配置文件位置**
 
-配置文件会在以下位置查找（按优先级）：
-- Python 包安装目录：`site-packages/cycronet/tls_profiles.json`
-- 当前工作目录：`./tls_profiles.json`
+当前版本会读取 Python 包安装目录里的配置文件：
+- `site-packages/cycronet/tls_profiles.json`
+- 源码开发时对应：`/Volumes/D/myxm/cyCronet/cycronet-build/python/cycronet/tls_profiles.json`
 
 **2. 编辑配置文件**
 
-打开 `tls_profiles.json` 文件，添加新的配置：
+打开 `tls_profiles.json` 文件，在最外层 JSON 对象里添加新的配置：
 
 ```json
 {
-  "chrome_144": {
-    "version": "Chrome 144",
+  "chrome_150_custom": {
+    "version": "Chrome 150 custom",
     "cipher_suites": [
       "TLS_GREASE",
       "TLS_AES_128_GCM_SHA256",
@@ -210,15 +315,20 @@ session = cycronet.CronetClient(chrometls="chrome_test")
       "TLS_RSA_WITH_AES_128_CBC_SHA",
       "TLS_RSA_WITH_AES_256_CBC_SHA"
     ],
-    "hex_codes": []
-  },
-  "chrome_143": {
-    "version": "Chrome 143",
-    "cipher_suites": [
-      "TLS_GREASE",
-      "TLS_AES_128_GCM_SHA256",
-      "TLS_AES_256_GCM_SHA384",
-      "TLS_CHACHA20_POLY1305_SHA256"
+    "tls_curves": ["X25519MLKEM768", "X25519", "P-256", "P-384"],
+    "tls_extensions": [],
+    "signature_algorithms": [
+      "0x0904",
+      "0x0905",
+      "0x0906",
+      "ecdsa_secp256r1_sha256",
+      "rsa_pss_rsae_sha256",
+      "rsa_pkcs1_sha256",
+      "0x0503",
+      "rsa_pss_rsae_sha384",
+      "rsa_pkcs1_sha384",
+      "rsa_pss_rsae_sha512",
+      "0x0601"
     ],
     "hex_codes": []
   }
@@ -230,10 +340,10 @@ session = cycronet.CronetClient(chrometls="chrome_test")
 ```python
 import cycronet
 
-# 使用新添加的 Chrome 143 配置
+# 使用新添加的自定义配置
 session = cycronet.CronetClient(
     verify=False,
-    chrometls="chrome_143"
+    chrometls="chrome_150_custom"
 )
 
 response = session.get('https://example.com')
@@ -248,6 +358,7 @@ session.close()
   - 必须使用标准的 TLS cipher suite 名称
   - 顺序很重要，会影响 TLS 指纹
   - `TLS_GREASE` 是 Chrome 的特殊值，用于防止协议僵化
+- `signature_algorithms`: TLS Signature Algorithms 列表（按顺序），支持算法名称或 `0xNNNN` 十六进制值
 - `hex_codes`: 对应的十六进制代码（可选，仅用于文档）
 
 **常用 Cipher Suites：**
@@ -810,7 +921,8 @@ session.close()
 ### WebSocket API 参考
 
 ```python
-ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None)
+ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None,
+                       headers=None, origin=None, sub_protocols=None)
 ```
 
 | 参数 | 类型 | 说明 |
@@ -827,8 +939,8 @@ ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_
 | `ws.send(text)` | 发送文本消息 |
 | `ws.send_bytes(data)` | 发送二进制消息 |
 | `ws.close(code=1000, reason="")` | 优雅关闭连接 |
-| `ws.run_forever()` | 阻塞运行 |
-| `ws.run_in_background()` | 后台运行 |
+| `ws.run_forever(blocking=True, recv_timeout_ms=500)` | 运行事件循环，默认阻塞当前线程 |
+| `ws.run_in_background(daemon=True, recv_timeout_ms=500)` | 后台运行 |
 | `ws.wait(timeout=None)` | 等待结束 |
 | `ws.connected` | 是否连接中 |
 
@@ -872,6 +984,93 @@ ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_
 - ✅ **高并发爬虫（使用异步 API）**
 - ✅ **大规模数据采集（异步并发）**
 - ✅ **实时监控系统（异步轮询）**
+- ✅ **WebSocket 实时通信（聊天、推送、行情）**
+- ✅ **WSS 连接绕过 WebSocket 指纹检测**
+
+### 轮询模式（底层 API）
+
+不使用回调时，可以直接操作底层的 `PyCronetWebSocket`，自己轮询事件：
+
+```python
+import cycronet
+import time
+
+client = cycronet.PyCronetClient()
+session_id = client.create_session(skip_cert_verify=True)
+
+# 连接 WebSocket 服务器
+ws = client.websocket_connect(session_id, "wss://ws.postman-echo.com/raw")
+
+# 等待连接打开
+evt = ws.recv_timeout(10000)  # 超时 10 秒，单位毫秒
+if evt and evt["type"] == "open":
+    print(f"已连接! 协议: {evt.get('protocol', '')}")
+
+# 发送文本消息
+ws.send("Hello WebSocket!")
+
+# 接收消息
+evt = ws.recv_timeout(5000)
+if evt and evt["type"] == "message":
+    print(f"收到: {evt['data']}")       # 消息内容
+    print(f"文本: {evt['is_text']}")     # True=文本, False=二进制
+
+# 发送二进制消息
+ws.send_bytes(b"\x00\x01\x02\x03")
+
+# 优雅关闭
+ws.close(1000, "bye")
+evt = ws.recv_timeout(5000)
+if evt and evt["type"] == "close":
+    print(f"关闭: code={evt['code']}, clean={evt['was_clean']}")
+
+# 清理：先销毁 ws，再关闭 session
+del ws
+time.sleep(0.5)
+client.close_session(session_id)
+```
+
+#### 事件类型
+
+`recv()` 和 `recv_timeout()` 返回一个字典，`type` 字段标识事件类型：
+
+| type | 字段 | 说明 |
+|------|------|------|
+| `open` | `protocol` | 连接成功，返回协商的子协议 |
+| `message` | `data`, `is_text` | 收到消息；`is_text=True` 时 `data` 为字符串，否则为 `bytes` |
+| `close` | `was_clean`, `code`, `reason` | 连接关闭 |
+| `error` | `net_error`, `message` | 连接错误 |
+
+#### 底层 API 参考
+
+| 方法 | 说明 |
+|------|------|
+| `client.websocket_connect(session_id, url, extra_headers=None, origin=None, sub_protocols=None)` | 创建 WebSocket 连接，返回 `PyCronetWebSocket` |
+| `ws.send(text)` | 发送文本消息 |
+| `ws.send_bytes(data)` | 发送二进制消息 |
+| `ws.recv()` | 阻塞接收下一个事件（释放 GIL） |
+| `ws.recv_timeout(ms)` | 带超时接收，超时返回 `None` |
+| `ws.close(code, reason)` | 发起关闭握手 |
+
+#### 快速收发多条消息
+
+```python
+# 批量发送
+for i in range(10):
+    ws.send(f"message-{i}")
+
+# 按序接收
+for i in range(10):
+    evt = ws.recv_timeout(5000)
+    assert evt["data"] == f"message-{i}"
+```
+
+### 注意事项
+
+- **TLS 指纹**：`wss://` 连接使用 Chromium 原生 BoringSSL，指纹与 Chrome 浏览器完全一致
+- **线程安全**：`recv()` / `recv_timeout()` 会释放 Python GIL，不会阻塞其他线程
+- **回调模式清理**：`session.close()` 前需确保 ws 已关闭（`ws.wait()` 等待完成）
+- **轮询模式清理**：必须先 `del ws`，等待片刻后再 `session.close()`
 
 ## 📦 安装
 

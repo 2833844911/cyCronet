@@ -1,0 +1,977 @@
+diff --git a/components/cronet/BUILD.gn b/components/cronet/BUILD.gn
+index 3dc9b6b8b9..be18d161d6 100644
+--- a/components/cronet/BUILD.gn
++++ b/components/cronet/BUILD.gn
+@@ -57,6 +57,8 @@ source_set("cronet_common") {
+     "tls_cipher_suite_mapper.h",
+     "tls_curve_mapper.cc",
+     "tls_curve_mapper.h",
++    "tls_signature_algorithm_mapper.cc",
++    "tls_signature_algorithm_mapper.h",
+     "url_request_context_config.cc",
+     "url_request_context_config.h",
+   ]
+diff --git a/components/cronet/cronet_context.cc b/components/cronet/cronet_context.cc
+index c2c01fab5c..541959b86e 100644
+--- a/components/cronet/cronet_context.cc
++++ b/components/cronet/cronet_context.cc
+@@ -25,8 +25,8 @@
+ #include "base/message_loop/message_pump_type.h"
+ #include "base/metrics/statistics_recorder.h"
+ #include "base/no_destructor.h"
+-#include "base/strings/string_util.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
+ #include "base/synchronization/waitable_event.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -40,6 +40,7 @@
+ #include "components/cronet/host_cache_persistence_manager.h"
+ #include "components/cronet/tls_cipher_suite_mapper.h"
+ #include "components/cronet/tls_curve_mapper.h"
++#include "components/cronet/tls_signature_algorithm_mapper.h"
+ #include "components/cronet/url_request_context_config.h"
+ #include "net/base/completion_once_callback.h"
+ #include "net/base/ip_address.h"
+@@ -105,8 +106,9 @@ class NetLogWithNetworkChangeEvents {
+   // registration.
+   void EnsureInitializedOnInitThread() {
+     DCHECK(cronet::OnInitThread());
+-    if (net_change_logger_)
++    if (net_change_logger_) {
+       return;
++    }
+     net_change_logger_ =
+         std::make_unique<net::LoggingNetworkChangeObserver>(net_log_);
+   }
+@@ -253,8 +255,9 @@ CronetContext::NetworkTasks::~NetworkTasks() {
+   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
+   callback_->OnDestroyNetworkThread();
+ 
+-  if (cronet_prefs_manager_)
++  if (cronet_prefs_manager_) {
+     cronet_prefs_manager_->PrepareForShutdown();
++  }
+ 
+   if (network_quality_estimator_) {
+     network_quality_estimator_->RemoveRTTObserver(this);
+@@ -263,8 +266,9 @@ CronetContext::NetworkTasks::~NetworkTasks() {
+     network_quality_estimator_->RemoveRTTAndThroughputEstimatesObserver(this);
+   }
+ 
+-  if (net::NetworkChangeNotifier::AreNetworkHandlesSupported())
++  if (net::NetworkChangeNotifier::AreNetworkHandlesSupported()) {
+     net::NetworkChangeNotifier::RemoveNetworkObserver(this);
++  }
+ }
+ 
+ void CronetContext::InitRequestContextOnInitThread() {
+@@ -315,8 +319,9 @@ bool CronetContext::URLRequestContextExistsForTesting(
+ 
+ void CronetContext::NetworkTasks::ProvideRTTObservations(bool should) {
+   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
+-  if (!network_quality_estimator_)
++  if (!network_quality_estimator_) {
+     return;
++  }
+   if (should) {
+     network_quality_estimator_->AddRTTObserver(this);
+   } else {
+@@ -333,8 +338,9 @@ void CronetContext::ProvideRTTObservations(bool should) {
+ 
+ void CronetContext::NetworkTasks::ProvideThroughputObservations(bool should) {
+   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
+-  if (!network_quality_estimator_)
++  if (!network_quality_estimator_) {
+     return;
++  }
+   if (should) {
+     network_quality_estimator_->AddThroughputObserver(this);
+   } else {
+@@ -483,6 +489,9 @@ void CronetContext::NetworkTasks::SetSharedURLRequestContextBuilderConfig(
+       TLSCipherSuiteMapper::NamesToIds(context_config_->custom_cipher_suites);
+   std::vector<net::SSLNamedGroupInfo> named_groups =
+       TLSCurveMapper::NamesToGroupInfos(context_config_->custom_tls_curves);
++  std::vector<uint16_t> signature_algorithm_ids =
++      TLSSignatureAlgorithmMapper::NamesToIds(
++          context_config_->custom_tls_signature_algorithms);
+ 
+   bool permute_extensions = true;
+   std::optional<bool> alps_use_new_codepoint;
+@@ -499,19 +508,22 @@ void CronetContext::NetworkTasks::SetSharedURLRequestContextBuilderConfig(
+   }
+ 
+   if (!cipher_suite_ids.empty() || !named_groups.empty() ||
++      !signature_algorithm_ids.empty() ||
+       !context_config_->custom_tls_extensions.empty()) {
+     context_builder->set_ssl_config_service(
+         std::make_unique<CronetSSLConfigService>(
+             std::move(cipher_suite_ids), std::move(named_groups),
+-            permute_extensions, alps_use_new_codepoint));
++            std::move(signature_algorithm_ids), permute_extensions,
++            alps_use_new_codepoint));
+   }
+ }
+ 
+ void CronetContext::NetworkTasks::SetSharedURLRequestContextConfig(
+     net::URLRequestContext* context) {
+   if (context_config_->enable_quic) {
+-    for (const auto& quic_hint : context_config_->quic_hints)
++    for (const auto& quic_hint : context_config_->quic_hints) {
+       SetQuicHint(context, quic_hint.get());
++    }
+   }
+ 
+   // Iterate through PKP configuration for every host.
+@@ -556,9 +568,10 @@ void CronetContext::NetworkTasks::Initialize(
+ 
+   network_task_runner_ = network_task_runner;
+   file_task_runner_ = file_task_runner;
+-  if (context_config_->network_thread_priority)
++  if (context_config_->network_thread_priority) {
+     SetNetworkThreadPriorityOnNetworkThread(
+         context_config_->network_thread_priority.value());
++  }
+   base::DisallowBlocking();
+   effective_experimental_options_ =
+       context_config_->effective_experimental_options.Clone();
+@@ -569,8 +582,9 @@ void CronetContext::NetworkTasks::Initialize(
+       BuildDefaultURLRequestContext(std::move(proxy_config_service));
+   default_context_ = contexts_[default_network].get();
+ 
+-  if (net::NetworkChangeNotifier::AreNetworkHandlesSupported())
++  if (net::NetworkChangeNotifier::AreNetworkHandlesSupported()) {
+     net::NetworkChangeNotifier::AddNetworkObserver(this);
++  }
+ 
+   callback_->OnInitNetworkThread();
+   is_default_context_initialized_ = true;
+@@ -592,12 +606,14 @@ net::URLRequestContext* CronetContext::NetworkTasks::GetURLRequestContext(
+   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
+   DCHECK(is_default_context_initialized_);
+ 
+-  if (network == net::handles::kInvalidNetworkHandle)
++  if (network == net::handles::kInvalidNetworkHandle) {
+     return default_context_;
++  }
+ 
+   // Non-default contexts are created on the fly.
+-  if (contexts_.find(network) == contexts_.end())
++  if (contexts_.find(network) == contexts_.end()) {
+     contexts_[network] = BuildNetworkBoundURLRequestContext(network);
++  }
+   return contexts_[network].get();
+ }
+ 
+@@ -606,10 +622,12 @@ void CronetContext::NetworkTasks::MaybeDestroyURLRequestContext(
+   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
+ 
+   // Default network context is never deleted.
+-  if (network == net::handles::kInvalidNetworkHandle)
++  if (network == net::handles::kInvalidNetworkHandle) {
+     return;
+-  if (!contexts_.contains(network))
++  }
++  if (!contexts_.contains(network)) {
+     return;
++  }
+ 
+   auto& context = contexts_[network];
+   // For a URLRequestContext to be destroyed, two conditions must be satisfied:
+@@ -811,16 +829,18 @@ void CronetContext::NetworkTasks::OnNetworkDisconnected(
+     net::handles::NetworkHandle network) {
+   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
+ 
+-  if (!contexts_.contains(network))
++  if (!contexts_.contains(network)) {
+     return;
++  }
+ 
+   auto& context = contexts_[network];
+   // After `network` disconnects, we can delete the URLRequestContext
+   // associated with it only if it has no pending URLRequests.
+   // If there are, their destruction procedure will take care of destroying
+   // this context (see MaybeDestroyURLRequestContext for more info).
+-  if (context->url_requests()->size() == 0)
++  if (context->url_requests()->size() == 0) {
+     contexts_.erase(network);
++  }
+ }
+ 
+ void CronetContext::NetworkTasks::OnNetworkConnected(
+@@ -841,8 +861,9 @@ void CronetContext::NetworkTasks::StartNetLog(const base::FilePath& file_path,
+   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
+ 
+   // Do nothing if already logging to a file.
+-  if (net_log_file_observer_)
++  if (net_log_file_observer_) {
+     return;
++  }
+ 
+   net::NetLogCaptureMode capture_mode =
+       include_socket_bytes ? net::NetLogCaptureMode::kEverything
+@@ -850,8 +871,9 @@ void CronetContext::NetworkTasks::StartNetLog(const base::FilePath& file_path,
+   net_log_file_observer_ = net::FileNetLogObserver::CreateUnbounded(
+       file_path, capture_mode, /*constants=*/nullptr);
+   std::set<net::URLRequestContext*> contexts;
+-  for (auto& iter : contexts_)
++  for (auto& iter : contexts_) {
+     contexts.insert(iter.second.get());
++  }
+   CreateNetLogEntriesForActiveObjects(contexts, net_log_file_observer_.get());
+   net_log_file_observer_->StartObserving(GetNetLog().net_log());
+ }
+@@ -890,8 +912,9 @@ void CronetContext::NetworkTasks::StartNetLogToBoundedFile(
+       file_path, size, capture_mode, /*constants=*/nullptr);
+ 
+   std::set<net::URLRequestContext*> contexts;
+-  for (auto& iter : contexts_)
++  for (auto& iter : contexts_) {
+     contexts.insert(iter.second.get());
++  }
+   CreateNetLogEntriesForActiveObjects(contexts, net_log_file_observer_.get());
+ 
+   net_log_file_observer_->StartObserving(GetNetLog().net_log());
+@@ -900,8 +923,9 @@ void CronetContext::NetworkTasks::StartNetLogToBoundedFile(
+ void CronetContext::NetworkTasks::StopNetLog() {
+   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
+ 
+-  if (!net_log_file_observer_)
++  if (!net_log_file_observer_) {
+     return;
++  }
+   net_log_file_observer_->StopObserving(
+       base::Value::ToUniquePtrValue(GetNetLogInfo()),
+       base::BindOnce(&CronetContext::NetworkTasks::StopNetLogCompleted,
+@@ -932,9 +956,10 @@ void CronetContext::NetworkTasks::OnTunnelHeadersReceived(
+ 
+ base::Value CronetContext::NetworkTasks::GetNetLogInfo() const {
+   base::Value::Dict net_info;
+-  for (auto& iter : contexts_)
++  for (auto& iter : contexts_) {
+     net_info.Set(base::NumberToString(iter.first),
+                  net::GetNetInfo(iter.second.get()));
++  }
+   if (!effective_experimental_options_.empty()) {
+     net_info.Set("cronetExperimentalParams",
+                  effective_experimental_options_.Clone());
+diff --git a/components/cronet/cronet_ssl_config_service.cc b/components/cronet/cronet_ssl_config_service.cc
+index 6daae6664d..d8202980c7 100644
+--- a/components/cronet/cronet_ssl_config_service.cc
++++ b/components/cronet/cronet_ssl_config_service.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <utility>
++
+ #include "base/logging.h"
+ #include "net/ssl/ssl_config.h"
+ 
+@@ -14,7 +15,8 @@ namespace cronet {
+ namespace {
+ 
+ // List of all commonly supported cipher suites in Chromium/BoringSSL
+-// This is used to compute which cipher suites to disable when custom ones are specified
++// This is used to compute which cipher suites to disable when custom ones are
++// specified
+ const uint16_t kAllKnownCipherSuites[] = {
+     // TLS 1.3 cipher suites
+     0x1301,  // TLS_AES_128_GCM_SHA256
+@@ -74,7 +76,8 @@ std::vector<uint16_t> ComputeDisabledCipherSuites(
+     }
+   }
+ 
+-  LOG(INFO) << "Custom cipher suites enabled: " << custom_cipher_suite_ids.size()
++  LOG(INFO) << "Custom cipher suites enabled: "
++            << custom_cipher_suite_ids.size()
+             << ", disabled: " << disabled_cipher_suites.size();
+ 
+   return disabled_cipher_suites;
+@@ -85,6 +88,7 @@ std::vector<uint16_t> ComputeDisabledCipherSuites(
+ CronetSSLConfigService::CronetSSLConfigService(
+     std::vector<uint16_t> custom_cipher_suite_ids,
+     std::vector<net::SSLNamedGroupInfo> custom_named_groups,
++    std::vector<uint16_t> custom_signature_algorithm_ids,
+     bool permute_extensions,
+     std::optional<bool> alps_use_new_codepoint) {
+   if (!custom_cipher_suite_ids.empty()) {
+@@ -101,6 +105,11 @@ CronetSSLConfigService::CronetSSLConfigService(
+     config_.supported_named_groups = std::move(custom_named_groups);
+   }
+ 
++  if (!custom_signature_algorithm_ids.empty()) {
++    config_.custom_signature_algorithm_prefs =
++        std::move(custom_signature_algorithm_ids);
++  }
++
+   config_.permute_extensions = permute_extensions;
+   config_.alps_use_new_codepoint = alps_use_new_codepoint;
+ }
+diff --git a/components/cronet/cronet_ssl_config_service.h b/components/cronet/cronet_ssl_config_service.h
+index ac8f961a1b..75e9b25af1 100644
+--- a/components/cronet/cronet_ssl_config_service.h
++++ b/components/cronet/cronet_ssl_config_service.h
+@@ -7,11 +7,13 @@
+ 
+ #include <optional>
+ #include <vector>
++
+ #include "net/ssl/ssl_config_service.h"
+ 
+ namespace cronet {
+ 
+-// SSLConfigService implementation for Cronet that supports custom cipher suites.
++// SSLConfigService implementation for Cronet that supports custom cipher
++// suites.
+ class CronetSSLConfigService : public net::SSLConfigService {
+  public:
+   // Creates a new CronetSSLConfigService with optional custom cipher suites and
+@@ -19,6 +21,7 @@ class CronetSSLConfigService : public net::SSLConfigService {
+   CronetSSLConfigService(
+       std::vector<uint16_t> custom_cipher_suite_ids,
+       std::vector<net::SSLNamedGroupInfo> custom_named_groups = {},
++      std::vector<uint16_t> custom_signature_algorithm_ids = {},
+       bool permute_extensions = true,
+       std::optional<bool> alps_use_new_codepoint = std::nullopt);
+ 
+diff --git a/components/cronet/url_request_context_config.cc b/components/cronet/url_request_context_config.cc
+index 3341ae4d50..5ef63e5e4f 100644
+--- a/components/cronet/url_request_context_config.cc
++++ b/components/cronet/url_request_context_config.cc
+@@ -226,8 +226,9 @@ const char kUseDnsHttpsSvcbUseAlpn[] = "use_alpn";
+ // [1] https://tools.ietf.org/html/draft-reschke-http-jfv
+ std::string SerializeJFVHeader(const base::Value& value) {
+   std::string result;
+-  if (!base::JSONWriter::Write(value, &result))
++  if (!base::JSONWriter::Write(value, &result)) {
+     return std::string();
++  }
+   if (value.is_list()) {
+     DCHECK(result.size() >= 2);
+     return result.substr(1, result.size() - 2);
+@@ -240,23 +241,27 @@ ParseNetworkErrorLoggingHeaders(
+     const base::Value::List& preloaded_headers_config) {
+   std::vector<URLRequestContextConfig::PreloadedNelAndReportingHeader> result;
+   for (const auto& preloaded_header_config : preloaded_headers_config) {
+-    if (!preloaded_header_config.is_dict())
++    if (!preloaded_header_config.is_dict()) {
+       continue;
++    }
+ 
+     const std::string* origin_config =
+         preloaded_header_config.GetDict().FindString(
+             kNetworkErrorLoggingOrigin);
+-    if (!origin_config)
++    if (!origin_config) {
+       continue;
++    }
+     GURL origin_url(*origin_config);
+-    if (!origin_url.is_valid())
++    if (!origin_url.is_valid()) {
+       continue;
++    }
+     auto origin = url::Origin::Create(origin_url);
+ 
+     auto* value =
+         preloaded_header_config.GetDict().Find(kNetworkErrorLoggingValue);
+-    if (!value)
++    if (!value) {
+       continue;
++    }
+ 
+     result.push_back(URLRequestContextConfig::PreloadedNelAndReportingHeader(
+         origin, SerializeJFVHeader(*value)));
+@@ -268,8 +273,9 @@ ParseNetworkErrorLoggingHeaders(
+ // otherwise.
+ template <typename T, typename F>
+ auto map(std::optional<T> maybe, F&& f) {
+-  if (!maybe)
++  if (!maybe) {
+     return std::optional<std::invoke_result_t<F, T>>();
++  }
+   return std::optional<std::invoke_result_t<F, T>>(f(maybe.value()));
+ }
+ 
+@@ -361,10 +367,11 @@ URLRequestContextConfig::CreateURLRequestContextConfig(
+   if (!experimental_options) {
+     // For the time being maintain backward compatibility by only failing to
+     // parse when DCHECKs are enabled.
+-    if (ExperimentalOptionsParsingIsAllowedToFail())
++    if (ExperimentalOptionsParsingIsAllowedToFail()) {
+       return nullptr;
+-    else
++    } else {
+       experimental_options = base::Value::Dict();
++    }
+   }
+   return base::WrapUnique(new URLRequestContextConfig(
+       enable_quic, enable_spdy, enable_brotli, http_cache, http_cache_max_size,
+@@ -381,8 +388,9 @@ URLRequestContextConfig::ParseExperimentalOptions(
+     std::string unparsed_experimental_options) {
+   // From a user perspective no experimental options means an empty string. The
+   // underlying code instead expects and empty dictionary. Normalize this.
+-  if (unparsed_experimental_options.empty())
++  if (unparsed_experimental_options.empty()) {
+     unparsed_experimental_options = "{}";
++  }
+   DVLOG(1) << "Experimental Options:" << unparsed_experimental_options;
+   auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
+       unparsed_experimental_options, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+@@ -618,8 +626,9 @@ void URLRequestContextConfig::SetContextBuilderExperimentalOptions(
+                                base::SPLIT_WANT_ALL)) {
+           std::vector<std::string> tokens = base::SplitString(
+               flag, "=", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+-          if (tokens.size() != 2)
++          if (tokens.size() != 2) {
+             continue;
++          }
+           net::SetQuicFlagByName(tokens[0], tokens[1]);
+         }
+       }
+@@ -807,6 +816,22 @@ void URLRequestContextConfig::SetContextBuilderExperimentalOptions(
+           custom_tls_extensions.push_back(extension.GetString());
+         }
+       }
++    } else if (iter->first == "tls_signature_algorithms") {
++      if (!iter->second.is_list()) {
++        LOG(ERROR) << "\"" << iter->first << "\" config params \""
++                   << iter->second << "\" is not a list";
++        effective_experimental_options.Remove(iter->first);
++        continue;
++      }
++      const base::Value::List& signature_algorithms_list =
++          iter->second.GetList();
++      custom_tls_signature_algorithms.clear();
++      for (const auto& signature_algorithm : signature_algorithms_list) {
++        if (signature_algorithm.is_string()) {
++          custom_tls_signature_algorithms.push_back(
++              signature_algorithm.GetString());
++        }
++      }
+     } else {
+       effective_experimental_options.Remove(iter->first);
+     }
+@@ -942,8 +967,9 @@ void URLRequestContextConfig::ConfigureURLRequestContextBuilder(
+         std::make_unique<CronetProxyDelegate>(*proxy_options, network_tasks));
+   }
+ 
+-  if (mock_cert_verifier)
++  if (mock_cert_verifier) {
+     context_builder->SetCertVerifier(std::move(mock_cert_verifier));
++  }
+   // TODO(mef): Use |config| to set cookies.
+ }
+ 
+diff --git a/components/cronet/url_request_context_config.h b/components/cronet/url_request_context_config.h
+index 0d7b6d6f03..d45e8e4ada 100644
+--- a/components/cronet/url_request_context_config.h
++++ b/components/cronet/url_request_context_config.h
+@@ -195,6 +195,11 @@ struct URLRequestContextConfig {
+   // - "application_settings"
+   std::vector<std::string> custom_tls_extensions;
+ 
++  // Custom TLS signature_algorithms values in order (specified by BoringSSL
++  // name or hex value).
++  // If empty, uses default signature algorithms.
++  std::vector<std::string> custom_tls_signature_algorithms;
++
+   static bool ExperimentalOptionsParsingIsAllowedToFail() {
+     return DCHECK_IS_ON();
+   }
+diff --git a/components/cronet/url_request_context_config_unittest.cc b/components/cronet/url_request_context_config_unittest.cc
+index 7e2475f787..141ca8c4dd 100644
+--- a/components/cronet/url_request_context_config_unittest.cc
++++ b/components/cronet/url_request_context_config_unittest.cc
+@@ -143,6 +143,9 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
+               base::Value::List().Append("X25519MLKEM768").Append("P-256"));
+   options.Set("tls_extensions",
+               base::Value::List().Append("application_settings_old"));
++  options.Set(
++      "tls_signature_algorithms",
++      base::Value::List().Append("0x0904").Append("rsa_pss_rsae_sha256"));
+   std::string options_json;
+   EXPECT_TRUE(base::JSONWriter::Write(options, &options_json));
+ 
+@@ -314,6 +317,9 @@ TEST(URLRequestContextConfigTest, TestExperimentalOptionParsing) {
+   EXPECT_EQ("P-256", config->custom_tls_curves[1]);
+   ASSERT_EQ(1u, config->custom_tls_extensions.size());
+   EXPECT_EQ("application_settings_old", config->custom_tls_extensions[0]);
++  ASSERT_EQ(2u, config->custom_tls_signature_algorithms.size());
++  EXPECT_EQ("0x0904", config->custom_tls_signature_algorithms[0]);
++  EXPECT_EQ("rsa_pss_rsae_sha256", config->custom_tls_signature_algorithms[1]);
+ 
+   // When UseDnsHttpsSvcb option is not set, the value of net::features are
+   // used.
+diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
+index e9c7475f9e..1e414066e5 100644
+--- a/net/socket/ssl_client_socket_impl.cc
++++ b/net/socket/ssl_client_socket_impl.cc
+@@ -335,8 +335,9 @@ int SSLClientSocketImpl::ExportKeyingMaterial(
+     std::optional<base::span<const uint8_t>> context,
+     base::span<uint8_t> out) {
+   DCHECK(base::IsStringASCII(label));
+-  if (!IsConnected())
++  if (!IsConnected()) {
+     return ERR_SOCKET_NOT_CONNECTED;
++  }
+ 
+   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
+ 
+@@ -430,11 +431,13 @@ int SSLClientSocketImpl::ConfirmHandshake(CompletionOnceCallback callback) {
+ bool SSLClientSocketImpl::IsConnected() const {
+   // If the handshake has not yet completed or the socket has been explicitly
+   // disconnected.
+-  if (!completed_connect_ || disconnected_)
++  if (!completed_connect_ || disconnected_) {
+     return false;
++  }
+   // If an asynchronous operation is still pending.
+-  if (user_read_buf_.get() || user_write_buf_.get())
++  if (user_read_buf_.get() || user_write_buf_.get()) {
+     return true;
++  }
+ 
+   return stream_socket_->IsConnected();
+ }
+@@ -442,11 +445,13 @@ bool SSLClientSocketImpl::IsConnected() const {
+ bool SSLClientSocketImpl::IsConnectedAndIdle() const {
+   // If the handshake has not yet completed or the socket has been explicitly
+   // disconnected.
+-  if (!completed_connect_ || disconnected_)
++  if (!completed_connect_ || disconnected_) {
+     return false;
++  }
+   // If an asynchronous operation is still pending.
+-  if (user_read_buf_.get() || user_write_buf_.get())
++  if (user_read_buf_.get() || user_write_buf_.get()) {
+     return false;
++  }
+ 
+   // If there is data read from the network that has not yet been consumed, do
+   // not treat the connection as idle.
+@@ -455,8 +460,9 @@ bool SSLClientSocketImpl::IsConnectedAndIdle() const {
+   // been flushed to the network. |Write| returns early, so this can cause race
+   // conditions which cause a socket to not be treated reusable when it should
+   // be. See https://crbug.com/466147.
+-  if (transport_adapter_->HasPendingReadData())
++  if (transport_adapter_->HasPendingReadData()) {
+     return false;
++  }
+ 
+   return stream_socket_->IsConnectedAndIdle();
+ }
+@@ -495,8 +501,9 @@ SSLClientSocketImpl::GetPeerApplicationSettings() const {
+ 
+ bool SSLClientSocketImpl::GetSSLInfo(SSLInfo* ssl_info) {
+   *ssl_info = SSLInfo();
+-  if (!server_cert_)
++  if (!server_cert_) {
+     return false;
++  }
+ 
+   ssl_info->cert = server_cert_verify_result_.verified_cert;
+   ssl_info->unverified_cert = server_cert_;
+@@ -585,8 +592,9 @@ int SSLClientSocketImpl::ReadIfReady(IOBuffer* buf,
+   if (rv == ERR_IO_PENDING) {
+     user_read_callback_ = std::move(callback);
+   } else {
+-    if (rv > 0)
++    if (rv > 0) {
+       was_ever_used_ = true;
++    }
+   }
+   return rv;
+ }
+@@ -660,8 +668,9 @@ int SSLClientSocketImpl::Init() {
+   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
+ 
+   ssl_.reset(SSL_new(context->ssl_ctx()));
+-  if (!ssl_ || !context->SetClientSocketForSSL(ssl_.get(), this))
++  if (!ssl_ || !context->SetClientSocketForSSL(ssl_.get(), this)) {
+     return ERR_UNEXPECTED;
++  }
+ 
+   const bool host_is_ip_address =
+       HostIsIPAddressNoBrackets(host_and_port_.host());
+@@ -707,8 +716,9 @@ int SSLClientSocketImpl::Init() {
+             GetSessionCacheKey(peer_address.address()));
+       }
+     }
+-    if (session)
++    if (session) {
+       SSL_set_session(ssl_.get(), session.get());
++    }
+   }
+ 
+   transport_adapter_ = std::make_unique<SocketBIOAdapter>(
+@@ -749,8 +759,9 @@ int SSLClientSocketImpl::Init() {
+   // These are the remaining CBC-mode ECDSA ciphers.
+   std::string command("ALL:!aPSK:!ECDSA+SHA1:!3DES");
+ 
+-  if (ssl_config_.require_ecdhe)
++  if (ssl_config_.require_ecdhe) {
+     command.append(":!kRSA");
++  }
+ 
+   // Check if custom cipher order is enabled
+   if (context_->config().use_custom_cipher_order &&
+@@ -759,8 +770,7 @@ int SSLClientSocketImpl::Init() {
+     // Use SSL_set_cipher_list_with_order which supports exact ordering
+     // including TLS 1.3 cipher suites
+     if (!SSL_set_cipher_list_with_order(
+-            ssl_.get(),
+-            context_->config().custom_cipher_suite_order.data(),
++            ssl_.get(), context_->config().custom_cipher_suite_order.data(),
+             context_->config().custom_cipher_suite_order.size())) {
+       LOG(ERROR) << "SSL_set_cipher_list_with_order failed";
+       return ERR_UNEXPECTED;
+@@ -791,8 +801,16 @@ int SSLClientSocketImpl::Init() {
+       SSL_SIGN_RSA_PSS_RSAE_SHA384,    SSL_SIGN_RSA_PKCS1_SHA384,
+       SSL_SIGN_RSA_PSS_RSAE_SHA512,    SSL_SIGN_RSA_PKCS1_SHA512,
+   };
+-  if (!SSL_set_verify_algorithm_prefs(ssl_.get(), kVerifyPrefs,
+-                                      std::size(kVerifyPrefs))) {
++  const std::vector<uint16_t>& custom_signature_algorithm_prefs =
++      context_->config().custom_signature_algorithm_prefs;
++  if (!custom_signature_algorithm_prefs.empty()) {
++    if (!SSL_set_verify_algorithm_prefs(
++            ssl_.get(), custom_signature_algorithm_prefs.data(),
++            custom_signature_algorithm_prefs.size())) {
++      return ERR_UNEXPECTED;
++    }
++  } else if (!SSL_set_verify_algorithm_prefs(ssl_.get(), kVerifyPrefs,
++                                             std::size(kVerifyPrefs))) {
+     return ERR_UNEXPECTED;
+   }
+ 
+@@ -859,8 +877,8 @@ int SSLClientSocketImpl::Init() {
+     }
+   }
+ 
+-  SSL_set_permute_extensions(
+-      ssl_.get(), context_->config().permute_extensions ? 1 : 0);
++  SSL_set_permute_extensions(ssl_.get(),
++                             context_->config().permute_extensions ? 1 : 0);
+ 
+   // Configure BoringSSL to send Trust Anchor IDs, if provided.
+   if (ssl_config_.trust_anchor_ids.has_value() &&
+@@ -884,8 +902,9 @@ int SSLClientSocketImpl::Init() {
+ void SSLClientSocketImpl::DoReadCallback(int rv) {
+   // Since Run may result in Read being called, clear |user_read_callback_|
+   // up front.
+-  if (rv > 0)
++  if (rv > 0) {
+     was_ever_used_ = true;
++  }
+   user_read_buf_ = nullptr;
+   user_read_buf_len_ = 0;
+   std::move(user_read_callback_).Run(rv);
+@@ -894,8 +913,9 @@ void SSLClientSocketImpl::DoReadCallback(int rv) {
+ void SSLClientSocketImpl::DoWriteCallback(int rv) {
+   // Since Run may result in Write being called, clear |user_write_callback_|
+   // up front.
+-  if (rv > 0)
++  if (rv > 0) {
+     was_ever_used_ = true;
++  }
+   user_write_buf_ = nullptr;
+   user_write_buf_len_ = 0;
+   std::move(user_write_callback_).Run(rv);
+@@ -942,8 +962,9 @@ int SSLClientSocketImpl::DoHandshake() {
+ }
+ 
+ int SSLClientSocketImpl::DoHandshakeComplete(int result) {
+-  if (result < 0)
++  if (result < 0) {
+     return result;
++  }
+ 
+   if (in_confirm_handshake_) {
+     next_handshake_state_ = STATE_NONE;
+@@ -966,8 +987,9 @@ int SSLClientSocketImpl::DoHandshakeComplete(int result) {
+ 
+   RecordNegotiatedProtocol();
+ 
+-  if (!IsRenegotiationAllowed())
++  if (!IsRenegotiationAllowed()) {
+     SSL_set_renegotiate_mode(ssl_.get(), ssl_renegotiate_never);
++  }
+ 
+   uint16_t signature_algorithm = SSL_get_peer_signature_algorithm(ssl_.get());
+   if (signature_algorithm != 0) {
+@@ -1164,8 +1186,9 @@ ssl_verify_result_t SSLClientSocketImpl::HandleVerifyResult() {
+   // callback later. The next call to VerifyCertCallback will be a
+   // continuation of the same verification, so leave
+   // cert_verification_result_ as-is.
+-  if (cert_verification_result_ == ERR_IO_PENDING)
++  if (cert_verification_result_ == ERR_IO_PENDING) {
+     return ssl_verify_retry;
++  }
+ 
+   // In BoringSSL's calling convention for asynchronous callbacks,
+   // after a callback returns a non-retry value, the operation has
+@@ -1339,8 +1362,9 @@ int SSLClientSocketImpl::DoPayloadRead(base::span<uint8_t> buf) {
+     // a connection, and instead terminate the TCP connection. This is reported
+     // as ERR_CONNECTION_CLOSED. Because of this, map the unclean shutdown to a
+     // graceful EOF, instead of treating it as an error as it should be.
+-    if (pending_read_error_ == ERR_CONNECTION_CLOSED)
++    if (pending_read_error_ == ERR_CONNECTION_CLOSED) {
+       pending_read_error_ = 0;
++    }
+   }
+ 
+   if (available_buffer.size() < buf.size()) {
+@@ -1351,8 +1375,9 @@ int SSLClientSocketImpl::DoPayloadRead(base::span<uint8_t> buf) {
+     // Do not treat insufficient data as an error to return in the next call to
+     // DoPayloadRead() - instead, let the call fall through to check SSL_read()
+     // again. The transport may have data available by then.
+-    if (pending_read_error_ == ERR_IO_PENDING)
++    if (pending_read_error_ == ERR_IO_PENDING) {
+       pending_read_error_ = kSSLClientSocketNoPendingResult;
++    }
+   } else {
+     // No bytes were returned. Return the pending read error immediately.
+     DCHECK_NE(kSSLClientSocketNoPendingResult, pending_read_error_);
+@@ -1384,8 +1409,9 @@ int SSLClientSocketImpl::DoPayloadWrite() {
+   }
+ 
+   int ssl_error = SSL_get_error(ssl_.get(), rv);
+-  if (ssl_error == SSL_ERROR_WANT_PRIVATE_KEY_OPERATION)
++  if (ssl_error == SSL_ERROR_WANT_PRIVATE_KEY_OPERATION) {
+     return ERR_IO_PENDING;
++  }
+   OpenSSLErrorInfo error_info;
+   int net_error = MapLastOpenSSLError(ssl_error, err_tracer, &error_info);
+ 
+@@ -1479,8 +1505,9 @@ void SSLClientSocketImpl::RetryAllOperations() {
+     OnHandshakeIOComplete(OK);
+   }
+ 
+-  if (!guard.get())
++  if (!guard.get()) {
+     return;
++  }
+ 
+   DoPeek();
+ 
+@@ -1494,17 +1521,21 @@ void SSLClientSocketImpl::RetryAllOperations() {
+     rv_read = OK;
+   }
+ 
+-  if (user_write_buf_)
++  if (user_write_buf_) {
+     rv_write = DoPayloadWrite();
++  }
+ 
+-  if (rv_read != ERR_IO_PENDING)
++  if (rv_read != ERR_IO_PENDING) {
+     DoReadCallback(rv_read);
++  }
+ 
+-  if (!guard.get())
++  if (!guard.get()) {
+     return;
++  }
+ 
+-  if (rv_write != ERR_IO_PENDING)
++  if (rv_write != ERR_IO_PENDING) {
+     DoWriteCallback(rv_write);
++  }
+ }
+ 
+ // static
+@@ -1591,8 +1622,9 @@ int SSLClientSocketImpl::ClientCertRequestCallback(SSL* ssl) {
+ }
+ 
+ int SSLClientSocketImpl::NewSessionCallback(SSL_SESSION* session) {
+-  if (!IsCachingEnabled())
++  if (!IsCachingEnabled()) {
+     return 0;
++  }
+ 
+   std::optional<IPAddress> ip_addr;
+   if (SSL_CIPHER_get_kx_nid(SSL_SESSION_get0_cipher(session)) == NID_kx_rsa) {
+@@ -1636,8 +1668,9 @@ bool SSLClientSocketImpl::IsRenegotiationAllowed() const {
+   }
+ 
+   for (NextProto allowed : ssl_config_.renego_allowed_for_protos) {
+-    if (negotiated_protocol_ == allowed)
++    if (negotiated_protocol_ == allowed) {
+       return true;
++    }
+   }
+   return false;
+ }
+@@ -1682,8 +1715,9 @@ ssl_private_key_result_t SSLClientSocketImpl::PrivateKeyCompleteCallback(
+   DCHECK_NE(kSSLClientSocketNoPendingResult, signature_result_);
+   DCHECK(client_private_key_);
+ 
+-  if (signature_result_ == ERR_IO_PENDING)
++  if (signature_result_ == ERR_IO_PENDING) {
+     return ssl_private_key_retry;
++  }
+   if (signature_result_ != OK) {
+     OpenSSLPutNetError(FROM_HERE, signature_result_);
+     return ssl_private_key_failure;
+@@ -1708,8 +1742,9 @@ void SSLClientSocketImpl::OnPrivateKeyComplete(
+   net_log_.EndEventWithNetErrorCode(NetLogEventType::SSL_PRIVATE_KEY_OP, error);
+ 
+   signature_result_ = error;
+-  if (signature_result_ == OK)
++  if (signature_result_ == OK) {
+     signature_ = signature;
++  }
+ 
+   // During a renegotiation, either Read or Write calls may be blocked on an
+   // asynchronous private key operation.
+diff --git a/net/ssl/ssl_config_service.h b/net/ssl/ssl_config_service.h
+index d8570a0806..aa14bc6f95 100644
+--- a/net/ssl/ssl_config_service.h
++++ b/net/ssl/ssl_config_service.h
+@@ -93,6 +93,10 @@ struct NET_EXPORT SSLContextConfig {
+   // - nullopt: use default feature flag behavior
+   std::optional<bool> alps_use_new_codepoint;
+ 
++  // Custom TLS signature_algorithms order. If non-empty, this list will be
++  // advertised instead of Chromium's default verify signature algorithms.
++  std::vector<uint16_t> custom_signature_algorithm_prefs;
++
+   // Controls whether ECH is enabled.
+   bool ech_enabled = true;
+ 
+diff --git a/components/cronet/tls_signature_algorithm_mapper.h b/components/cronet/tls_signature_algorithm_mapper.h
+new file mode 100644
+index 0000000000..a7602cdba4
+--- /dev/null
++++ b/components/cronet/tls_signature_algorithm_mapper.h
+@@ -0,0 +1,32 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_CRONET_TLS_SIGNATURE_ALGORITHM_MAPPER_H_
++#define COMPONENTS_CRONET_TLS_SIGNATURE_ALGORITHM_MAPPER_H_
++
++#include <stdint.h>
++
++#include <string>
++#include <vector>
++
++namespace cronet {
++
++// Maps TLS SignatureScheme names or hex values to their numeric IDs.
++class TLSSignatureAlgorithmMapper {
++ public:
++  // Converts a signature algorithm name or value to its numeric ID.
++  // Supports BoringSSL names such as "rsa_pss_rsae_sha256", raw hex values
++  // such as "0x0904", and packet-dump labels such as "Unknown(0x0904)".
++  // Returns 0 if the value is not recognized or not parseable.
++  static uint16_t NameToId(const std::string& name);
++
++  // Converts a list of signature algorithm names or values to numeric IDs.
++  // Unrecognized values are skipped.
++  static std::vector<uint16_t> NamesToIds(
++      const std::vector<std::string>& names);
++};
++
++}  // namespace cronet
++
++#endif  // COMPONENTS_CRONET_TLS_SIGNATURE_ALGORITHM_MAPPER_H_
+diff --git a/components/cronet/tls_signature_algorithm_mapper.cc b/components/cronet/tls_signature_algorithm_mapper.cc
+new file mode 100644
+index 0000000000..95993ae0d8
+--- /dev/null
++++ b/components/cronet/tls_signature_algorithm_mapper.cc
+@@ -0,0 +1,92 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/cronet/tls_signature_algorithm_mapper.h"
++
++#include <map>
++#include <optional>
++#include <string_view>
++
++#include "base/logging.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
++
++namespace cronet {
++
++namespace {
++
++const std::map<std::string, uint16_t>& GetSignatureAlgorithmMap() {
++  static const base::NoDestructor<std::map<std::string, uint16_t>>
++      kSignatureAlgorithmMap({
++          {"RSA_PKCS1_SHA256", 0x0401},
++          {"ECDSA_SECP256R1_SHA256", 0x0403},
++          {"ECDSA_SECP384R1_SHA384", 0x0503},
++          {"RSA_PKCS1_SHA384", 0x0501},
++          {"RSA_PKCS1_SHA512", 0x0601},
++          {"RSA_PSS_RSAE_SHA256", 0x0804},
++          {"RSA_PSS_RSAE_SHA384", 0x0805},
++          {"RSA_PSS_RSAE_SHA512", 0x0806},
++          {"ED25519", 0x0807},
++      });
++  return *kSignatureAlgorithmMap;
++}
++
++std::optional<uint16_t> ParseHexSignatureAlgorithm(std::string value) {
++  base::TrimWhitespaceASCII(value, base::TRIM_ALL, &value);
++  value = base::ToUpperASCII(value);
++
++  constexpr std::string_view kUnknownPrefix = "UNKNOWN(";
++  if (base::StartsWith(value, kUnknownPrefix) && base::EndsWith(value, ")")) {
++    value = value.substr(kUnknownPrefix.size(),
++                         value.size() - kUnknownPrefix.size() - 1);
++  }
++
++  if (!base::StartsWith(value, "0X")) {
++    return std::nullopt;
++  }
++
++  unsigned parsed = 0;
++  if (!base::HexStringToUInt(value.substr(2), &parsed) || parsed > 0xffff) {
++    return std::nullopt;
++  }
++  return static_cast<uint16_t>(parsed);
++}
++
++}  // namespace
++
++uint16_t TLSSignatureAlgorithmMapper::NameToId(const std::string& name) {
++  if (std::optional<uint16_t> parsed = ParseHexSignatureAlgorithm(name)) {
++    return *parsed;
++  }
++
++  std::string normalized_name = base::ToUpperASCII(name);
++  base::TrimWhitespaceASCII(normalized_name, base::TRIM_ALL, &normalized_name);
++
++  const auto& map = GetSignatureAlgorithmMap();
++  auto it = map.find(normalized_name);
++  if (it != map.end()) {
++    return it->second;
++  }
++
++  LOG(WARNING) << "Unknown TLS signature algorithm: " << name;
++  return 0;
++}
++
++std::vector<uint16_t> TLSSignatureAlgorithmMapper::NamesToIds(
++    const std::vector<std::string>& names) {
++  std::vector<uint16_t> ids;
++  ids.reserve(names.size());
++
++  for (const auto& name : names) {
++    uint16_t id = NameToId(name);
++    if (id != 0) {
++      ids.push_back(id);
++    }
++  }
++
++  return ids;
++}
++
++}  // namespace cronet

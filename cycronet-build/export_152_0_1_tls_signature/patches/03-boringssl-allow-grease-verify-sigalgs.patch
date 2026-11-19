@@ -1,0 +1,45 @@
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -1604,7 +1604,8 @@
+   ssl_grease_version,
+   ssl_grease_ticket_extension,
+   ssl_grease_ech_config_id,
+-  ssl_grease_last_index = ssl_grease_ech_config_id,
++  ssl_grease_sigalg,
++  ssl_grease_last_index = ssl_grease_sigalg,
+ };
+ 
+ enum tls12_server_hs_state_t {
+--- a/ssl/extensions.cc
++++ b/ssl/extensions.cc
+@@ -313,7 +313,16 @@
+ }
+ 
+ bool tls12_add_verify_sigalgs(const SSL_HANDSHAKE *hs, CBB *out) {
++  // A GREASE value in the configured preferences is a placeholder, not a
++  // literal. Substitute a freshly chosen GREASE value per connection, the way
++  // Chrome does; sending the configured constant every time would itself be a
++  // fingerprint. Only clients GREASE: the server path here writes
++  // CertificateRequest, which Chrome does not GREASE.
++  const bool grease_sigalg = !hs->ssl->server && hs->ssl->ctx->grease_enabled;
+   for (uint16_t sigalg : tls12_get_verify_sigalgs(hs)) {
++    if (grease_sigalg && (sigalg & 0x0f0f) == 0x0a0a) {
++      sigalg = ssl_get_grease_value(hs, ssl_grease_sigalg);
++    }
+     if (!CBB_add_u16(out, sigalg)) {
+       return false;
+     }
+--- a/ssl/ssl_privkey.cc
++++ b/ssl/ssl_privkey.cc
+@@ -554,6 +554,11 @@
+ }
+ 
+ static bool is_extra_advertised_sigalg(uint16_t sigalg) {
++  // GREASE values (RFC 8701): 0x0a0a, 0x1a1a, ... 0xfafa. Chrome 152 advertises
++  // one of these first in signature_algorithms.
++  if ((sigalg & 0x0f0f) == 0x0a0a) {
++    return true;
++  }
+   return sigalg == 0x0904 || sigalg == 0x0905 || sigalg == 0x0906;
+ }
+ 

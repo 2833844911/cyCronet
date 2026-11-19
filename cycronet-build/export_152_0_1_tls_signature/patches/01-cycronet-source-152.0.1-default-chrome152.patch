@@ -1,0 +1,296 @@
+--- a/cycronet-build/README.md
++++ b/cycronet-build/README.md
+@@ -42,9 +42,9 @@
+ 
+ Cycronet 直接使用 Chromium 的 Cronet 网络库，产生的所有网络特征与真实 Chrome 浏览器**完全一致**，无法被检测出是爬虫。
+ 
+-## 🚀 cyCronet 150.1.0 快速使用
+-
+-当前本地构建版本是 `150.1.0`，默认 TLS profile 是 `chrome_150`。正常使用时不需要手动传 `chrometls`，它会自动读取包内 `python/cycronet/tls_profiles.json` 的 `chrome_150` 配置。
++## 🚀 cyCronet 152.0.1 快速使用
++
++当前本地构建版本是 `152.0.1`，默认 TLS profile 是 `chrome_152`。正常使用时不需要手动传 `chrometls`，它会自动读取包内 `python/cycronet/tls_profiles.json` 的 `chrome_152` 配置。
+ 
+ ### 安装本地编译好的 wheel
+ 
+@@ -65,12 +65,12 @@
+ print(data["http2"]["akamai_fingerprint_hash"])
+ ```
+ 
+-### 显式指定 chrome_150
+-
+-```python
+-import cycronet
+-
+-with cycronet.CronetClient(verify=False, chrometls="chrome_150") as session:
++### 显式指定 chrome_152
++
++```python
++import cycronet
++
++with cycronet.CronetClient(verify=False, chrometls="chrome_152") as session:
+     response = session.get("https://tls.peet.ws/api/all")
+     print(response.json()["http2"]["akamai_fingerprint"])
+ ```
+@@ -84,9 +84,11 @@
+ print(response.text)
+ ```
+ 
+-如果页面里 `name: signature_algorithms (13)` 下方顺序如下，说明 `chrome_150` 配置已经生效：
++如果页面里 `name: signature_algorithms (13)` 下方顺序如下，说明 `chrome_152` 配置已经生效
++（`chrome_150` 除了没有开头的 GREASE 值 `Unknown(0x0a0a)` 之外，其余顺序相同）：
+ 
+ ```text
++- Unknown(0x0a0a)
+ - Unknown(0x0904)
+ - Unknown(0x0905)
+ - Unknown(0x0906)
+@@ -212,7 +214,8 @@
+ ```
+ 
+ **支持的 TLS 配置：**
+-- `chrome_150`: Chrome 150 版本的 TLS 指纹（默认）
++- `chrome_152`: Chrome 152 版本的 TLS 指纹（默认，带 `trust_anchors` 扩展和 GREASE signature algorithm）
++- `chrome_150`: Chrome 150 版本的 TLS 指纹
+ - `chrome_144` / `chrome_145` / `chrome_146` / `chrome_147` / `chrome_133` / `chrome_126`: 用于回退或对比测试
+ 
+ #### 添加自定义 TLS 配置
+--- a/cycronet-build/python/cycronet/tls_profiles.json
++++ b/cycronet-build/python/cycronet/tls_profiles.json
+@@ -1,4 +1,51 @@
+ {
++   "chrome_152": {
++    "version": "Chrome 152",
++    "cipher_suites": [
++      "TLS_GREASE",
++      "TLS_AES_128_GCM_SHA256",
++      "TLS_AES_256_GCM_SHA384",
++      "TLS_CHACHA20_POLY1305_SHA256",
++      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
++      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
++      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
++      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
++      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
++      "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
++      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
++      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
++      "TLS_RSA_WITH_AES_128_GCM_SHA256",
++      "TLS_RSA_WITH_AES_256_GCM_SHA384",
++      "TLS_RSA_WITH_AES_128_CBC_SHA",
++      "TLS_RSA_WITH_AES_256_CBC_SHA"
++    ],
++    "tls_curves": [
++      "X25519MLKEM768",
++      "X25519",
++      "P-256",
++      "P-384"
++    ],
++    "tls_extensions": [
++      "trust_anchors"
++    ],
++    "signature_algorithms": [
++      "0x0a0a",
++      "0x0904",
++      "0x0905",
++      "0x0906",
++      "ecdsa_secp256r1_sha256",
++      "rsa_pss_rsae_sha256",
++      "rsa_pkcs1_sha256",
++      "0x0503",
++      "rsa_pss_rsae_sha384",
++      "rsa_pkcs1_sha384",
++      "rsa_pss_rsae_sha512",
++      "0x0601"
++    ],
++    "hex_codes": [
++
++    ]
++  },
+    "chrome_150": {
+     "version": "Chrome 150",
+     "cipher_suites": [
+--- a/cycronet-build/pyproject.toml
++++ b/cycronet-build/pyproject.toml
+@@ -4,7 +4,7 @@
+ 
+ [project]
+ name = "cycronet"
+-version = "150.1.1"
++version = "152.0.1"
+ description = "Python bindings for Cronet-Cloak - Authentic Chrome TLS/HTTP2 fingerprints with async support"
+ readme = "README.md"
+ requires-python = ">=3.7"
+--- a/cycronet-build/python/cycronet/_native_loader.py
++++ b/cycronet-build/python/cycronet/_native_loader.py
+@@ -50,6 +50,12 @@
+ def _load_linux_libraries():
+     """Load Linux SO libraries in the correct order."""
+     package_dir = os.path.dirname(__file__)
++
++    # Silence GLib's "Using the 'memory' GSettings backend" message that Cronet's
++    # system proxy-config service emits on headless Linux (no dconf). Cycronet sets
++    # proxies explicitly and never uses system GSettings, so forcing the memory
++    # backend is safe. setdefault respects any user-provided override.
++    os.environ.setdefault("GSETTINGS_BACKEND", "memory")
+ 
+     # Loading order is important: load base dependencies first, then NSS, finally cronet
+     # 1. Load NSPR (NSS base dependency)
+--- a/cycronet-build/python/cycronet/_api_sync.py
++++ b/cycronet-build/python/cycronet/_api_sync.py
+@@ -9,7 +9,7 @@
+ from ._client import CronetClient
+ 
+ 
+-def _send(method, url, *, stream=False, proxies=None, chrometls="chrome_150",
++def _send(method, url, *, stream=False, proxies=None, chrometls="chrome_152",
+           timeout=None, verify=True, **kwargs):
+     """Internal helper: keeps session alive when stream=True."""
+     timeout_ms = int(timeout * 1000) if timeout else 30000
+@@ -37,7 +37,7 @@
+     allow_redirects: bool = True,
+     stream: bool = False,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     **kwargs
+ ):
+     """Send GET request - similar to requests.get()"""
+@@ -59,7 +59,7 @@
+     allow_redirects: bool = True,
+     stream: bool = False,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     **kwargs
+ ):
+     """Send POST request - similar to requests.post()"""
+@@ -82,7 +82,7 @@
+     allow_redirects: bool = True,
+     stream: bool = False,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     **kwargs
+ ):
+     """Send PUT request - similar to requests.put()"""
+@@ -103,7 +103,7 @@
+     allow_redirects: bool = True,
+     stream: bool = False,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     **kwargs
+ ):
+     """Send DELETE request - similar to requests.delete()"""
+@@ -125,7 +125,7 @@
+     allow_redirects: bool = True,
+     stream: bool = False,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     **kwargs
+ ):
+     """Send PATCH request - similar to requests.patch()"""
+@@ -146,7 +146,7 @@
+     allow_redirects: bool = True,
+     stream: bool = False,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     **kwargs
+ ):
+     """Send HEAD request - similar to requests.head()"""
+@@ -166,7 +166,7 @@
+     allow_redirects: bool = True,
+     stream: bool = False,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     **kwargs
+ ):
+     """Send OPTIONS request - similar to requests.options()"""
+--- a/cycronet-build/python/cycronet/_client.py
++++ b/cycronet-build/python/cycronet/_client.py
+@@ -267,7 +267,7 @@
+     verify: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+     timeout_ms: int = 30000,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     headers: Optional[Dict[str, str]] = None,
+     base_url: Optional[str] = None,
+     default_domain: Optional[str] = None
+@@ -279,7 +279,7 @@
+         verify: Whether to verify SSL certificates (False to skip verification)
+         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
+         timeout_ms: Timeout in milliseconds
+-        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
++        chrometls: TLS fingerprint configuration name (e.g. "chrome_152")
+         headers: Default headers for all requests in this session
+         base_url: Optional base URL; its host is used as the default cookie
+             domain when *default_domain* is not set.
+@@ -294,7 +294,7 @@
+     Example:
+         session = CronetClient(verify=False)
+         session = CronetClient(proxies={"https": "http://127.0.0.1:8080"})
+-        session = CronetClient(verify=False, chrometls="chrome_150")
++        session = CronetClient(verify=False, chrometls="chrome_152")
+         session = CronetClient(headers={"User-Agent": "MyApp/1.0"})
+         response = session.get("https://example.com")
+     """
+@@ -355,7 +355,7 @@
+     verify: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+     timeout_ms: int = 30000,
+-    chrometls: Optional[str] = "chrome_150",
++    chrometls: Optional[str] = "chrome_152",
+     headers: Optional[Dict[str, str]] = None,
+     base_url: Optional[str] = None,
+     default_domain: Optional[str] = None
+@@ -367,7 +367,7 @@
+         verify: Whether to verify SSL certificates (False to skip verification)
+         proxies: Proxy configuration, supports dict format {"https": "http://127.0.0.1:8080"} or string
+         timeout_ms: Timeout in milliseconds
+-        chrometls: TLS fingerprint configuration name (e.g. "chrome_150")
++        chrometls: TLS fingerprint configuration name (e.g. "chrome_152")
+         headers: Default headers for all requests in this session
+         base_url: Optional base URL; its host is used as the default cookie
+             domain when *default_domain* is not set.
+--- a/cycronet-build/python/cycronet/__init__.pyi
++++ b/cycronet-build/python/cycronet/__init__.pyi
+@@ -406,7 +406,7 @@
+     verify: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+     timeout_ms: int = 30000,
+-    chrometls: Optional[str] = "chrome_150"
++    chrometls: Optional[str] = "chrome_152"
+ ) -> Session:
+     """
+     创建 Cronet Session - 类似 requests.Session()
+@@ -415,7 +415,7 @@
+         verify: 是否验证 SSL 证书（False 跳过验证）
+         proxies: 代理配置，支持字典格式 {"https": "http://127.0.0.1:8080"} 或字符串
+         timeout_ms: 超时时间（毫秒）
+-        chrometls: TLS 指纹配置名称（如 "chrome_150"）
++        chrometls: TLS 指纹配置名称（如 "chrome_152"）
+ 
+     Returns:
+         Session 对象
+@@ -427,7 +427,7 @@
+     verify: bool = True,
+     proxies: Optional[Union[str, Dict[str, str]]] = None,
+     timeout_ms: int = 30000,
+-    chrometls: Optional[str] = "chrome_150"
++    chrometls: Optional[str] = "chrome_152"
+ ) -> AsyncSession:
+     """
+     创建异步 Cronet Session - 支持 async/await
+@@ -436,7 +436,7 @@
+         verify: 是否验证 SSL 证书（False 跳过验证）
+         proxies: 代理配置，支持字典格式 {"https": "http://127.0.0.1:8080"} 或字符串
+         timeout_ms: 超时时间（毫秒）
+-        chrometls: TLS 指纹配置名称（如 "chrome_150"）
++        chrometls: TLS 指纹配置名称（如 "chrome_152"）
+ 
+     Returns:
+         AsyncSession 对象

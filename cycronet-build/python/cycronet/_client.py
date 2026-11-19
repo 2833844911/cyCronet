@@ -65,7 +65,8 @@ def set_tls_profiles(profiles: Dict[str, Dict]) -> None:
             "chrome_test": {
                 "cipher_suites": ["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"],
                 "tls_curves": ["X25519"],
-                "tls_extensions": []
+                "tls_extensions": [],
+                "signature_algorithms": []
             }
         })
         session = cycronet.CronetClient(chrometls="chrome_test")
@@ -79,15 +80,16 @@ def add_tls_profile(name: str, profile: Dict) -> None:
 
     Args:
         name: Profile name (e.g., "chrome_test")
-        profile: Profile configuration with cipher_suites, tls_curves,
-            tls_extensions, and signature_algorithms
+        profile: Profile configuration with cipher_suites, tls_curves, tls_extensions,
+            signature_algorithms
 
     Example:
         import cycronet
         cycronet.add_tls_profile("chrome_test", {
             "cipher_suites": ["TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"],
             "tls_curves": ["X25519"],
-            "tls_extensions": []
+            "tls_extensions": [],
+            "signature_algorithms": []
         })
     """
     profiles = _load_tls_profiles()
@@ -111,8 +113,11 @@ def clear_tls_profiles_cache() -> None:
 
 def _load_tls_profile(chrometls: Optional[str] = None) -> Optional[Dict[str, List[str]]]:
     """Get TLS fingerprint configuration for a specific profile"""
+    if chrometls is None:
+        return None
+
     profiles = _load_tls_profiles()
-    if chrometls is None or chrometls not in profiles:
+    if chrometls not in profiles:
         available = ', '.join(sorted(profiles.keys())) if profiles else 'none'
         raise RequestError(
             f"TLS profile '{chrometls}' not found. Available profiles: {available}"
@@ -136,6 +141,67 @@ def _extract_base_url_host(base_url: Optional[str]) -> str:
     if host.startswith("."):
         host = host[1:]
     return host
+
+
+def _header_value(headers: Optional[Dict[str, str]], name: str) -> Optional[str]:
+    if not headers:
+        return None
+    wanted = name.lower()
+    for header_name, value in headers.items():
+        if header_name.lower() == wanted:
+            return value
+    return None
+
+
+def _create_session_with_tls_profile(
+    client,
+    proxy_rules,
+    skip_cert_verify,
+    timeout_ms,
+    cipher_suites,
+    tls_curves,
+    tls_extensions,
+    signature_algorithms,
+    user_agent,
+    accept_language,
+):
+    try:
+        return client.create_session(
+            proxy_rules,
+            skip_cert_verify,
+            timeout_ms,
+            cipher_suites,
+            tls_curves,
+            tls_extensions,
+            signature_algorithms,
+            user_agent,
+            accept_language,
+        )
+    except TypeError as exc:
+        try:
+            return client.create_session(
+                proxy_rules,
+                skip_cert_verify,
+                timeout_ms,
+                cipher_suites,
+                tls_curves,
+                tls_extensions,
+                signature_algorithms,
+            )
+        except TypeError:
+            if signature_algorithms:
+                raise RequestError(
+                    "signature_algorithms requires a cycronet native extension "
+                    "rebuilt with tls_signature_algorithms support"
+                ) from exc
+            return client.create_session(
+                proxy_rules,
+                skip_cert_verify,
+                timeout_ms,
+                cipher_suites,
+                tls_curves,
+                tls_extensions,
+            )
 
 
 def _validate_proxy_url(proxy_url: str) -> None:
@@ -261,16 +327,21 @@ def CronetClient(
     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
     signature_algorithms = tls_profile.get("signature_algorithms", []) if tls_profile else None
+    user_agent = _header_value(headers, "user-agent")
+    accept_language = _header_value(headers, "accept-language")
 
     client = PyCronetClient(thread_count)
-    session_id = client.create_session(
+    session_id = _create_session_with_tls_profile(
+        client,
         proxy_rules,
         not verify,  # skip_cert_verify = not verify
         timeout_ms,
         cipher_suites,
         tls_curves,
         tls_extensions,
-        signature_algorithms
+        signature_algorithms,
+        user_agent,
+        accept_language,
     )
 
     # Create a wrapped Session, save client reference
@@ -344,16 +415,21 @@ def AsyncCronetClient(
     tls_curves = tls_profile.get("tls_curves", []) if tls_profile else None
     tls_extensions = tls_profile.get("tls_extensions", []) if tls_profile else None
     signature_algorithms = tls_profile.get("signature_algorithms", []) if tls_profile else None
+    user_agent = _header_value(headers, "user-agent")
+    accept_language = _header_value(headers, "accept-language")
 
     client = PyCronetClient(thread_count)
-    session_id = client.create_session(
+    session_id = _create_session_with_tls_profile(
+        client,
         proxy_rules,
         not verify,
         timeout_ms,
         cipher_suites,
         tls_curves,
         tls_extensions,
-        signature_algorithms
+        signature_algorithms,
+        user_agent,
+        accept_language,
     )
 
     class _ClientWrapper:

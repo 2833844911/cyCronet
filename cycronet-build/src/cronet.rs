@@ -224,10 +224,14 @@ fn build_experimental_options(
     }
     if let Some(values) = signature_algorithms {
         if !values.is_empty() {
-            options.insert(
-                "signature_algorithms".to_string(),
-                serde_json::json!(values),
-            );
+            // macOS 的 Cronet 补丁线里这个选项叫 tls_signature_algorithms，
+            // Linux/Windows 的叫 signature_algorithms；键名不对时选项会被忽略
+            let key = if cfg!(target_os = "macos") {
+                "tls_signature_algorithms"
+            } else {
+                "signature_algorithms"
+            };
+            options.insert(key.to_string(), serde_json::json!(values));
         }
     }
 
@@ -1905,6 +1909,8 @@ pub struct SessionConfig {
     pub proxy_rules: Option<String>,
     pub skip_cert_verify: bool,
     pub timeout_ms: u64,
+    pub user_agent: Option<String>,
+    pub accept_language: Option<String>,
     pub cipher_suites: Option<Vec<String>>,
     pub tls_curves: Option<Vec<String>>,
     pub tls_extensions: Option<Vec<String>>,
@@ -2001,6 +2007,48 @@ impl SessionManager {
                     }
                 };
                 Cronet_EngineParams_proxy_rules_set(params, c_rules.as_ptr());
+            }
+
+            if let Some(ref user_agent) = config.user_agent {
+                let c_user_agent = match safe_cstring(user_agent, "user_agent") {
+                    Ok(value) => value,
+                    Err(e) => {
+                        eprintln!("[ERROR] {}", e);
+                        seh_destroy!(
+                            params,
+                            Cronet_EngineParams_Destroy,
+                            "SessionEngineParams_UserAgent_cleanup"
+                        );
+                        seh_destroy!(
+                            engine,
+                            Cronet_Engine_Destroy,
+                            "SessionEngine_UserAgent_cleanup"
+                        );
+                        return String::new();
+                    }
+                };
+                Cronet_EngineParams_user_agent_set(params, c_user_agent.as_ptr());
+            }
+
+            if let Some(ref accept_language) = config.accept_language {
+                let c_accept_language = match safe_cstring(accept_language, "accept_language") {
+                    Ok(value) => value,
+                    Err(e) => {
+                        eprintln!("[ERROR] {}", e);
+                        seh_destroy!(
+                            params,
+                            Cronet_EngineParams_Destroy,
+                            "SessionEngineParams_AcceptLanguage_cleanup"
+                        );
+                        seh_destroy!(
+                            engine,
+                            Cronet_Engine_Destroy,
+                            "SessionEngine_AcceptLanguage_cleanup"
+                        );
+                        return String::new();
+                    }
+                };
+                Cronet_EngineParams_accept_language_set(params, c_accept_language.as_ptr());
             }
 
             Cronet_EngineParams_enable_quic_set(params, true);

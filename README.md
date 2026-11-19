@@ -15,6 +15,9 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 - 📡 **流式响应（Streaming）支持（NEW！）**
 - 🔌 **WebSocket（WSS）支持，Chrome TLS 指纹（NEW！）**
 - 📨 **WebSocket 自定义 Headers 注入（NEW！）**
+### 项目打赏，大家用好了可以打赏打赏作者哦。
+![](./0c63233762334b80240a6ee11f572005-2.jpg)
+
 
 ### 为什么需要 Cycronet？
 
@@ -814,7 +817,8 @@ session.close()
 
 ```python
 # 推荐：通过 session.websocket()
-ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None)
+ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_error=None,
+                       headers=None, origin=None, sub_protocols=None)
 ```
 
 | 参数 | 类型 | 说明 |
@@ -824,7 +828,9 @@ ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_
 | `on_message` | `callable` | 收到消息 `(ws, data, is_text)` |
 | `on_close` | `callable` | 连接关闭 `(ws, code, reason, was_clean)` |
 | `on_error` | `callable` | 发生错误 `(ws, message, net_error)` |
-| `headers` | `list[tuple]` | 自定义 HTTP Headers，如 `[("User-Agent", "...")]` |
+| `headers` | `dict` 或 `list[tuple]` | 自定义 HTTP Headers，如 `[("User-Agent", "...")]`；未提供 `Cookie` 时自动带上会话 CookieJar |
+| `origin` | `str` | 指定 `Origin`；省略时使用 `headers` 里的 `Origin` |
+| `sub_protocols` | `str` | 逗号分隔的 WebSocket 子协议 |
 
 **方法：**
 
@@ -833,13 +839,98 @@ ws = session.websocket(url, *, on_open=None, on_message=None, on_close=None, on_
 | `ws.send(text)` | 发送文本消息 |
 | `ws.send_bytes(data)` | 发送二进制消息 |
 | `ws.close(code=1000, reason="")` | 优雅关闭连接 |
-| `ws.stop()` | 强制停止事件循环 |
-| `ws.run_forever()` | 阻塞运行事件循环 |
-| `ws.run_in_background()` | 后台线程运行，返回 Thread 对象 |
+| `ws.stop()` | 发起关闭握手并停止事件循环 |
+| `ws.run_forever(blocking=True, recv_timeout_ms=500)` | 运行事件循环，默认阻塞当前线程 |
+| `ws.run_in_background(daemon=True, recv_timeout_ms=500)` | 后台线程运行，返回 Thread 对象 |
 | `ws.wait(timeout=None)` | 等待后台线程结束 |
 | `ws.connected` | 属性，是否处于连接状态 |
 
-## �� 高级配置
+### 轮询模式（底层 API）
+
+不使用回调时，可以直接操作底层的 `PyCronetWebSocket`，自己轮询事件：
+
+```python
+import cycronet
+import time
+
+client = cycronet.PyCronetClient()
+session_id = client.create_session(skip_cert_verify=True)
+
+# 连接 WebSocket 服务器
+ws = client.websocket_connect(session_id, "wss://ws.postman-echo.com/raw")
+
+# 等待连接打开
+evt = ws.recv_timeout(10000)  # 超时 10 秒，单位毫秒
+if evt and evt["type"] == "open":
+    print(f"已连接! 协议: {evt.get('protocol', '')}")
+
+# 发送文本消息
+ws.send("Hello WebSocket!")
+
+# 接收消息
+evt = ws.recv_timeout(5000)
+if evt and evt["type"] == "message":
+    print(f"收到: {evt['data']}")       # 消息内容
+    print(f"文本: {evt['is_text']}")     # True=文本, False=二进制
+
+# 发送二进制消息
+ws.send_bytes(b"\x00\x01\x02\x03")
+
+# 优雅关闭
+ws.close(1000, "bye")
+evt = ws.recv_timeout(5000)
+if evt and evt["type"] == "close":
+    print(f"关闭: code={evt['code']}, clean={evt['was_clean']}")
+
+# 清理：先销毁 ws，再关闭 session
+del ws
+time.sleep(0.5)
+client.close_session(session_id)
+```
+
+#### 事件类型
+
+`recv()` 和 `recv_timeout()` 返回一个字典，`type` 字段标识事件类型：
+
+| type | 字段 | 说明 |
+|------|------|------|
+| `open` | `protocol` | 连接成功，返回协商的子协议 |
+| `message` | `data`, `is_text` | 收到消息；`is_text=True` 时 `data` 为字符串，否则为 `bytes` |
+| `close` | `was_clean`, `code`, `reason` | 连接关闭 |
+| `error` | `net_error`, `message` | 连接错误 |
+
+#### 底层 API 参考
+
+| 方法 | 说明 |
+|------|------|
+| `client.websocket_connect(session_id, url, extra_headers=None, origin=None, sub_protocols=None)` | 创建 WebSocket 连接，返回 `PyCronetWebSocket` |
+| `ws.send(text)` | 发送文本消息 |
+| `ws.send_bytes(data)` | 发送二进制消息 |
+| `ws.recv()` | 阻塞接收下一个事件（释放 GIL） |
+| `ws.recv_timeout(ms)` | 带超时接收，超时返回 `None` |
+| `ws.close(code, reason)` | 发起关闭握手 |
+
+#### 快速收发多条消息
+
+```python
+# 批量发送
+for i in range(10):
+    ws.send(f"message-{i}")
+
+# 按序接收
+for i in range(10):
+    evt = ws.recv_timeout(5000)
+    assert evt["data"] == f"message-{i}"
+```
+
+### 注意事项
+
+- **TLS 指纹**：`wss://` 连接使用 Chromium 原生 BoringSSL，指纹与 Chrome 浏览器完全一致
+- **线程安全**：`recv()` / `recv_timeout()` 会释放 Python GIL，不会阻塞其他线程
+- **回调模式清理**：`session.close()` 前需确保 ws 已关闭（`ws.wait()` 等待完成）
+- **轮询模式清理**：必须先 `del ws`，等待片刻后再 `session.close()`
+
+## 🔧 高级配置
 
 ### SSL 证书验证
 
@@ -1088,6 +1179,8 @@ response = cycronet.get('https://example.com', headers=headers, verify=False)
 - ✅ **高并发爬虫（使用异步 API）**
 - ✅ **大规模数据采集（异步并发）**
 - ✅ **实时监控系统（异步轮询）**
+- ✅ **WebSocket 实时通信（聊天、推送、行情）**
+- ✅ **WSS 连接绕过 WebSocket 指纹检测**
 
 ## 📦 安装
 

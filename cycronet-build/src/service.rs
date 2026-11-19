@@ -296,6 +296,8 @@ pub async fn create_session(
         proxy_rules,
         skip_cert_verify: request.skip_cert_verify,
         timeout_ms: request.timeout_ms,
+        user_agent: None,
+        accept_language: None,
         cipher_suites: None,
         tls_curves: None,
         tls_extensions: None,

@@ -52,4 +52,3 @@ exclude = [
     "**/*.backup*",
     "cronet-bin/**"
 ]
-

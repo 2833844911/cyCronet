@@ -754,7 +754,18 @@ class Session:
             'headers': response.headers
         }
 
-    def websocket(self, url, *, on_open=None, on_message=None, on_close=None, on_error=None, headers=None):
+    def websocket(
+        self,
+        url: str,
+        *,
+        on_open=None,
+        on_message=None,
+        on_close=None,
+        on_error=None,
+        headers: Optional[HeadersType] = None,
+        origin: Optional[str] = None,
+        sub_protocols: Optional[str] = None,
+    ):
         """Create a callback-based WebSocket connection.
 
         Args:
@@ -763,19 +774,67 @@ class Session:
             on_message: callback(ws, message, is_text) - called on message
             on_close: callback(ws, code, reason, was_clean) - called on close
             on_error: callback(ws, error, net_error) - called on error
-            headers: list of (name, value) tuples for custom HTTP headers
+            headers: custom Upgrade headers. The session CookieJar is merged
+                when this argument does not already include ``Cookie``.
+            origin: explicit WebSocket Origin value. When omitted, an Origin
+                entry in ``headers`` is used.
+            sub_protocols: optional comma-separated WebSocket subprotocols
 
         Returns:
             WebSocketApp instance. Call .run_forever() or .run_in_background() to start.
         """
+        if self._closed:
+            raise RequestError("Session is closed")
+        parsed = urlparse(url)
+        if parsed.scheme not in ("ws", "wss") or not parsed.hostname:
+            raise RequestError("WebSocket URL must use ws:// or wss:// and include a host")
+
+        # A WebSocket Upgrade is HTTP/1.1 fingerprint-sensitive.  Do not pass
+        # it through _prepare_headers(): that generic helper moves Cookie and
+        # Priority fields, which changes the browser's Upgrade field order.
+        if headers is None:
+            prepared_headers = list(self._default_headers.items())
+        elif isinstance(headers, dict):
+            prepared_headers = list(headers.items())
+        else:
+            prepared_headers = list(headers)
+
+        # Keep an explicit Cookie header exactly where the caller placed it.
+        # Only append CookieJar state when no raw Cookie header was supplied.
+        has_cookie = any(
+            isinstance(name, str) and name.lower() == "cookie"
+            for name, _ in prepared_headers
+        )
+        if not has_cookie:
+            matching_cookies = []
+            for cookie in self._cookies.iter_cookies():
+                if (
+                    not cookie.domain
+                    or cookie.domain == parsed.hostname
+                    or domain_matches(cookie.domain, parsed.hostname)
+                ):
+                    matching_cookies.append(cookie)
+            matching_cookies.sort(key=lambda cookie: cookie.seq)
+            if matching_cookies:
+                prepared_headers.append((
+                    "Cookie",
+                    "; ".join(
+                        f"{cookie.name}={cookie.value}"
+                        for cookie in matching_cookies
+                    ),
+                ))
+
         from ._websocket import WebSocketApp
         return WebSocketApp(
-            self, url,
+            self,
+            url,
             on_open=on_open,
             on_message=on_message,
             on_close=on_close,
             on_error=on_error,
-            headers=headers,
+            headers=prepared_headers,
+            origin=origin,
+            sub_protocols=sub_protocols,
         )
 
     def close(self):

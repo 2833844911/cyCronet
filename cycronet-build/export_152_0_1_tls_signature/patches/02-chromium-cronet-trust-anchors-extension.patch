@@ -1,0 +1,139 @@
+--- a/net/ssl/ssl_config_service.h
++++ b/net/ssl/ssl_config_service.h
+@@ -97,6 +97,10 @@
+   // advertised instead of Chromium's default verify signature algorithms.
+   std::vector<uint16_t> custom_signature_algorithm_prefs;
+ 
++  // If true, send an empty trust_anchors extension in the ClientHello even when
++  // no Trust Anchor IDs are configured. Matches Chrome 152.
++  bool send_empty_trust_anchors = false;
++
+   // Controls whether ECH is enabled.
+   bool ech_enabled = true;
+ 
+--- a/net/socket/ssl_client_socket_impl.cc
++++ b/net/socket/ssl_client_socket_impl.cc
+@@ -880,12 +880,20 @@
+   SSL_set_permute_extensions(ssl_.get(),
+                              context_->config().permute_extensions ? 1 : 0);
+ 
+-  // Configure BoringSSL to send Trust Anchor IDs, if provided.
+-  if (ssl_config_.trust_anchor_ids.has_value() &&
+-      !SSL_set1_requested_trust_anchors(ssl_.get(),
+-                                        ssl_config_.trust_anchor_ids->data(),
+-                                        ssl_config_.trust_anchor_ids->size())) {
+-    return ERR_UNEXPECTED;
++  // Configure BoringSSL to send Trust Anchor IDs, if provided. Otherwise, if
++  // the config asks for it, send the extension with an empty list, which is how
++  // Chrome 152 signals support without requesting specific anchors.
++  if (ssl_config_.trust_anchor_ids.has_value()) {
++    if (!SSL_set1_requested_trust_anchors(
++            ssl_.get(), ssl_config_.trust_anchor_ids->data(),
++            ssl_config_.trust_anchor_ids->size())) {
++      return ERR_UNEXPECTED;
++    }
++  } else if (context_->config().send_empty_trust_anchors) {
++    static constexpr uint8_t kNoTrustAnchors[1] = {0};
++    if (!SSL_set1_requested_trust_anchors(ssl_.get(), kNoTrustAnchors, 0)) {
++      return ERR_UNEXPECTED;
++    }
+   }
+ 
+   // The compliance policy must be the last thing configured in order to have
+--- a/components/cronet/cronet_ssl_config_service.h
++++ b/components/cronet/cronet_ssl_config_service.h
+@@ -23,7 +23,8 @@
+       std::vector<net::SSLNamedGroupInfo> custom_named_groups = {},
+       std::vector<uint16_t> custom_signature_algorithm_ids = {},
+       bool permute_extensions = true,
+-      std::optional<bool> alps_use_new_codepoint = std::nullopt);
++      std::optional<bool> alps_use_new_codepoint = std::nullopt,
++      bool send_empty_trust_anchors = false);
+ 
+   CronetSSLConfigService(const CronetSSLConfigService&) = delete;
+   CronetSSLConfigService& operator=(const CronetSSLConfigService&) = delete;
+--- a/components/cronet/cronet_ssl_config_service.cc
++++ b/components/cronet/cronet_ssl_config_service.cc
+@@ -90,7 +90,8 @@
+     std::vector<net::SSLNamedGroupInfo> custom_named_groups,
+     std::vector<uint16_t> custom_signature_algorithm_ids,
+     bool permute_extensions,
+-    std::optional<bool> alps_use_new_codepoint) {
++    std::optional<bool> alps_use_new_codepoint,
++    bool send_empty_trust_anchors) {
+   if (!custom_cipher_suite_ids.empty()) {
+     // Use custom cipher suite order (exact order as specified)
+     config_.custom_cipher_suite_order = custom_cipher_suite_ids;
+@@ -112,6 +113,7 @@
+ 
+   config_.permute_extensions = permute_extensions;
+   config_.alps_use_new_codepoint = alps_use_new_codepoint;
++  config_.send_empty_trust_anchors = send_empty_trust_anchors;
+ }
+ 
+ CronetSSLConfigService::~CronetSSLConfigService() = default;
+--- a/components/cronet/cronet_context.cc
++++ b/components/cronet/cronet_context.cc
+@@ -494,6 +494,7 @@
+           context_config_->custom_tls_signature_algorithms);
+ 
+   bool permute_extensions = true;
++  bool send_empty_trust_anchors = false;
+   std::optional<bool> alps_use_new_codepoint;
+   for (const auto& extension : context_config_->custom_tls_extensions) {
+     std::string normalized = base::ToLowerASCII(extension);
+@@ -504,6 +505,10 @@
+     } else if (normalized == "application_settings") {
+       alps_use_new_codepoint = true;
+       permute_extensions = false;
++    } else if (normalized == "trust_anchors") {
++      // Chrome 152 sends an empty trust_anchors extension and still permutes
++      // its extensions, so leave |permute_extensions| alone here.
++      send_empty_trust_anchors = true;
+     }
+   }
+ 
+@@ -514,7 +519,7 @@
+         std::make_unique<CronetSSLConfigService>(
+             std::move(cipher_suite_ids), std::move(named_groups),
+             std::move(signature_algorithm_ids), permute_extensions,
+-            alps_use_new_codepoint));
++            alps_use_new_codepoint, send_empty_trust_anchors));
+   }
+ }
+ 
+--- a/components/cronet/url_request_context_config.h
++++ b/components/cronet/url_request_context_config.h
+@@ -193,6 +193,7 @@
+   // Recognized values include:
+   // - "application_settings_old"
+   // - "application_settings"
++  // - "trust_anchors"
+   std::vector<std::string> custom_tls_extensions;
+ 
+   // Custom TLS signature_algorithms values in order (specified by BoringSSL
+--- a/components/cronet/url_request_context_config_unittest.cc
++++ b/components/cronet/url_request_context_config_unittest.cc
+@@ -141,8 +141,9 @@
+   options.Set("spdy_go_away_on_ip_change", true);
+   options.Set("tls_curves",
+               base::Value::List().Append("X25519MLKEM768").Append("P-256"));
+-  options.Set("tls_extensions",
+-              base::Value::List().Append("application_settings_old"));
++  options.Set("tls_extensions", base::Value::List()
++                                    .Append("application_settings_old")
++                                    .Append("trust_anchors"));
+   options.Set(
+       "tls_signature_algorithms",
+       base::Value::List().Append("0x0904").Append("rsa_pss_rsae_sha256"));
+@@ -315,8 +316,9 @@
+   ASSERT_EQ(2u, config->custom_tls_curves.size());
+   EXPECT_EQ("X25519MLKEM768", config->custom_tls_curves[0]);
+   EXPECT_EQ("P-256", config->custom_tls_curves[1]);
+-  ASSERT_EQ(1u, config->custom_tls_extensions.size());
++  ASSERT_EQ(2u, config->custom_tls_extensions.size());
+   EXPECT_EQ("application_settings_old", config->custom_tls_extensions[0]);
++  EXPECT_EQ("trust_anchors", config->custom_tls_extensions[1]);
+   ASSERT_EQ(2u, config->custom_tls_signature_algorithms.size());
+   EXPECT_EQ("0x0904", config->custom_tls_signature_algorithms[0]);
+   EXPECT_EQ("rsa_pss_rsae_sha256", config->custom_tls_signature_algorithms[1]);
