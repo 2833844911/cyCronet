@@ -192,14 +192,22 @@ pub unsafe extern "C" fn cycronet_init() -> c_int {
 pub unsafe extern "C" fn cycronet_shutdown() {
     // Drop global – this will drop SessionManager (which drops all Sessions/Engines)
     // and then drop the tokio Runtime.
-    let mut guard = match global_cell().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            eprintln!("[cycronet] global mutex poisoned during shutdown, recovering");
-            poisoned.into_inner()
-        }
-    };
-    *guard = None;
+    {
+        let mut guard = match global_cell().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                eprintln!("[cycronet] global mutex poisoned during shutdown, recovering");
+                poisoned.into_inner()
+            }
+        };
+        *guard = None;
+    }
+
+    // Requests and engines are destroyed on a background thread. Wait for it so
+    // the caller may unload the library once this function returns.
+    if !crate::cronet::flush_deferred_teardown(Duration::from_secs(10)) {
+        eprintln!("[cycronet] shutdown: teardown still in progress after 10s");
+    }
 }
 
 // =====================================================================

@@ -805,131 +805,513 @@ impl CronetRequest {
             rx,
         )
     }
-
-    fn leak_to_avoid_crash(&mut self, live_requests: &Option<Arc<AtomicUsize>>) {
-        self.ptr = std::ptr::null_mut();
-        self.callback_ptr = std::ptr::null_mut();
-        self.request_context_ptr = std::ptr::null_mut();
-        self.executor_ptr = std::ptr::null_mut();
-        self.executor_context_ptr = std::ptr::null_mut();
-        self.upload_data_provider_ptr = None;
-        self.upload_context_ptr = std::ptr::null_mut();
-        self.owned_engine_ptr = None;
-        if let Some(counter) = live_requests {
-            counter.fetch_sub(1, Ordering::Release);
-        }
-    }
 }
 
 impl Drop for CronetRequest {
     fn drop(&mut self) {
-        unsafe {
-            let live_requests = self.live_requests.take();
+        // 这份 body 只是为了保活多存的一份（UploadContext 自己还有一份），不必留到销毁
+        self.upload_body_data = None;
 
-            // 保存原始指针用于从 pending_requests 移除
-            let original_ptr = self.ptr;
+        let teardown = RequestTeardown {
+            ptr: self.ptr,
+            callback_ptr: self.callback_ptr,
+            request_context_ptr: self.request_context_ptr,
+            executor_ptr: self.executor_ptr,
+            executor_context_ptr: self.executor_context_ptr,
+            owned_engine_ptr: self.owned_engine_ptr.take(),
+            upload_data_provider_ptr: self.upload_data_provider_ptr.take(),
+            upload_context_ptr: self.upload_context_ptr,
+            completed: self.completed.clone(),
+            request_in_flight: self.request_in_flight.clone(),
+            live_requests: self.live_requests.take(),
+            pending_requests: self.pending_requests.take(),
+            destroy_mutex: self.destroy_mutex.take(),
+            cancel_deadline: Instant::now() + REQUEST_CANCEL_TIMEOUT,
+            destroy_window: None,
+        };
 
-            // 检查请求是否已完成
-            if !self.completed.load(Ordering::Acquire) {
-                // 请求尚未完成，先取消它
-                verbose_log!("[DEBUG] CronetRequest::drop - Request not completed, canceling...");
-                seh_call!(self.ptr, Cronet_UrlRequest_Cancel, "UrlRequest_Cancel");
-                // 等待请求完成（最多等待 5 秒）
-                let start = std::time::Instant::now();
-                while !self.completed.load(Ordering::Acquire) {
-                    if start.elapsed() > std::time::Duration::from_secs(5) {
-                        eprintln!("[WARN] CronetRequest::drop - Timeout waiting for cancel callback, leaking request to avoid use-after-free");
-                        // 网络线程仍持有引用，不能销毁任何指针，否则会 DCHECK crash。
-                        // 泄漏内存，但避免崩溃。
-                        self.leak_to_avoid_crash(&live_requests);
-                        return;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-            }
-
-            // completed == true，等待 C++ 网络线程完成内部清理（MaybeReportMetrics 等）
-            // 避免 Destroy 与仍在执行的回调产生竞态导致 DCHECK(!in_dtor_) crash
-            // 高并发代理失败场景下需要更长的 grace period
-            std::thread::sleep(std::time::Duration::from_millis(200));
-
-            if !wait_counter_zero(
-                &self.request_in_flight,
-                std::time::Duration::from_secs(2),
-                "request executor callbacks",
-            ) {
-                eprintln!(
-                    "[WARN] CronetRequest::drop - executor callback still running, leaking request to avoid use-after-free"
-                );
-                self.leak_to_avoid_crash(&live_requests);
-                return;
-            }
-
-            // 序列化销毁：防止多个请求同时调用 Destroy 导致 cronet.dll 内部竞态崩溃
-            let _destroy_guard = self.destroy_mutex.as_ref().and_then(|m| m.lock().ok());
-
-            if let Some(ref pending) = self.pending_requests {
-                pending.remove(original_ptr);
-                verbose_log!("[DEBUG] CronetRequest::drop - Removed from pending list");
-            }
-
-            if !self.callback_ptr.is_null() {
-                Cronet_UrlRequestCallback_SetClientContext(self.callback_ptr, std::ptr::null_mut());
-            }
-            if !self.executor_ptr.is_null() {
-                Cronet_Executor_SetClientContext(self.executor_ptr, std::ptr::null_mut());
-            }
-            if let Some(dp) = self.upload_data_provider_ptr {
-                Cronet_UploadDataProvider_SetClientContext(dp, std::ptr::null_mut());
-            }
-
-            // completed == true，可以安全销毁（SEH 保护，防止崩溃）
-            seh_destroy!(self.ptr, Cronet_UrlRequest_Destroy, "UrlRequest_Destroy");
-            seh_destroy!(
-                self.callback_ptr,
-                Cronet_UrlRequestCallback_Destroy,
-                "Callback_Destroy"
-            );
-            seh_destroy!(
-                self.executor_ptr,
-                Cronet_Executor_Destroy,
-                "Executor_Destroy"
-            );
-            if !self.request_context_ptr.is_null() {
-                let _ = Box::from_raw(self.request_context_ptr);
-                self.request_context_ptr = std::ptr::null_mut();
-            }
-            // 释放 ExecutorContext
-            if !self.executor_context_ptr.is_null() {
-                let _ = Box::from_raw(self.executor_context_ptr);
-                self.executor_context_ptr = std::ptr::null_mut();
-            }
-            if let Some(dp) = self.upload_data_provider_ptr.take() {
-                seh_destroy!(
-                    dp,
-                    Cronet_UploadDataProvider_Destroy,
-                    "UploadDataProvider_Destroy"
-                );
-            }
-            if !self.upload_context_ptr.is_null() {
-                let _ = Box::from_raw(self.upload_context_ptr);
-                self.upload_context_ptr = std::ptr::null_mut();
-            }
-            // Finally destroy engine if we own it
-            if let Some(engine_ptr) = self.owned_engine_ptr.take() {
-                seh_shutdown!(engine_ptr);
-                seh_destroy!(engine_ptr, Cronet_Engine_Destroy, "Engine_Destroy");
-            }
-
-            // 释放锁后稍微等待，让 Chromium 网络线程完全安定
-            drop(_destroy_guard);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-
-            if let Some(ref counter) = live_requests {
+        if !teardown.has_native_objects() {
+            // CronetRequest::failed()：没有创建任何 native 对象
+            if let Some(counter) = teardown.live_requests {
                 counter.fetch_sub(1, Ordering::Release);
+            }
+            return;
+        }
+
+        // 请求尚未完成，先取消它；等待取消回调和销毁都在后台线程进行
+        if !self.completed.load(Ordering::Acquire) {
+            verbose_log!("[DEBUG] CronetRequest::drop - Request not completed, canceling...");
+            unsafe {
+                seh_call!(self.ptr, Cronet_UrlRequest_Cancel, "UrlRequest_Cancel");
+            }
+        }
+
+        submit_teardown(TeardownJob::Request(teardown));
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Deferred Teardown
+// -----------------------------------------------------------------------------
+//
+// 销毁请求前要在最终回调之后留一段宽限期，销毁 engine 前要等它上面的请求全部销毁。
+// 这些等待统一放到一个后台线程上做，这样 drop CronetRequest / Session 不会阻塞
+// 调用方（调用方可能正持有 Python GIL，或者是 Tokio 的工作线程）。
+// native 对象只在这个线程上销毁，所有 Destroy 调用因此也是串行的。
+
+use std::collections::VecDeque;
+use std::time::Duration;
+
+/// 最终回调之后到销毁 native 对象之间的宽限期，
+/// 让 C++ 网络线程先完成内部清理（MaybeReportMetrics 等）
+const REQUEST_DESTROY_GRACE: Duration = Duration::from_millis(200);
+/// 销毁请求之后到释放它对 engine 的占用之间的间隔，让 Chromium 网络线程完全安定
+const REQUEST_SETTLE_DELAY: Duration = Duration::from_millis(10);
+/// 未完成就被 drop 的请求，等待取消回调的最长时间
+const REQUEST_CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
+/// 等待仍在执行的 executor 回调结束的最长时间
+const EXECUTOR_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// 关闭会话时，进行中的请求全部取消之后的额外等待
+const SESSION_CANCEL_SETTLE: Duration = Duration::from_millis(100);
+/// 关闭会话时，等待 CronetRequest 句柄全部释放的最长时间
+const SESSION_HANDLE_TIMEOUT: Duration = Duration::from_secs(2);
+/// 后台线程检查待销毁对象的间隔
+const TEARDOWN_TICK: Duration = Duration::from_millis(5);
+
+/// 已被 drop 的请求留下的 native 对象，等待销毁
+struct RequestTeardown {
+    ptr: Cronet_UrlRequestPtr,
+    callback_ptr: Cronet_UrlRequestCallbackPtr,
+    request_context_ptr: *mut RequestContext,
+    executor_ptr: Cronet_ExecutorPtr,
+    executor_context_ptr: *mut ExecutorContext,
+    owned_engine_ptr: Option<Cronet_EnginePtr>,
+    upload_data_provider_ptr: Option<Cronet_UploadDataProviderPtr>,
+    upload_context_ptr: *mut UploadContext,
+    completed: Arc<AtomicBool>,
+    request_in_flight: Arc<AtomicUsize>,
+    live_requests: Option<Arc<AtomicUsize>>,
+    pending_requests: Option<Arc<PendingRequests>>,
+    destroy_mutex: Option<Arc<Mutex<()>>>,
+    cancel_deadline: Instant,
+    // 观察到最终回调之后才有值：(最早销毁时间, 等待 executor 回调的截止时间)
+    destroy_window: Option<(Instant, Instant)>,
+}
+
+unsafe impl Send for RequestTeardown {}
+
+impl RequestTeardown {
+    fn has_native_objects(&self) -> bool {
+        !self.ptr.is_null()
+            || !self.callback_ptr.is_null()
+            || !self.executor_ptr.is_null()
+            || !self.request_context_ptr.is_null()
+            || !self.executor_context_ptr.is_null()
+            || !self.upload_context_ptr.is_null()
+            || self.upload_data_provider_ptr.is_some()
+            || self.owned_engine_ptr.is_some()
+    }
+
+    /// 推进销毁流程；请求已销毁（或已放弃并泄漏）时返回 true
+    unsafe fn poll(
+        &mut self,
+        now: Instant,
+        settling: &mut VecDeque<(Instant, Arc<AtomicUsize>)>,
+    ) -> bool {
+        let (destroy_at, drain_deadline) = match self.destroy_window {
+            Some(window) => window,
+            None => {
+                if !self.completed.load(Ordering::Acquire) {
+                    if now < self.cancel_deadline {
+                        return false;
+                    }
+                    eprintln!("[WARN] CronetRequest teardown - Timeout waiting for cancel callback, leaking request to avoid use-after-free");
+                    // 网络线程仍持有引用，不能销毁任何指针，否则会 DCHECK crash。
+                    // 泄漏内存，但避免崩溃。
+                    self.leak();
+                    return true;
+                }
+                // completed == true，等待 C++ 网络线程完成内部清理（MaybeReportMetrics 等）
+                // 避免 Destroy 与仍在执行的回调产生竞态导致 DCHECK(!in_dtor_) crash
+                // 高并发代理失败场景下需要更长的 grace period
+                let destroy_at = now + REQUEST_DESTROY_GRACE;
+                let window = (destroy_at, destroy_at + EXECUTOR_DRAIN_TIMEOUT);
+                self.destroy_window = Some(window);
+                window
+            }
+        };
+
+        if now < destroy_at {
+            return false;
+        }
+        if self.request_in_flight.load(Ordering::Acquire) > 0 {
+            if now < drain_deadline {
+                return false;
+            }
+            eprintln!(
+                "[WARN] CronetRequest teardown - executor callback still running, leaking request to avoid use-after-free"
+            );
+            self.leak();
+            return true;
+        }
+
+        self.destroy();
+        // 稍后再释放对 engine 的占用，让 Chromium 网络线程完全安定
+        if let Some(counter) = self.live_requests.take() {
+            settling.push_back((now + REQUEST_SETTLE_DELAY, counter));
+        }
+        true
+    }
+
+    /// 放弃销毁：native 对象留着不动，只释放对 engine 的占用
+    fn leak(&mut self) {
+        if let Some(counter) = self.live_requests.take() {
+            counter.fetch_sub(1, Ordering::Release);
+        }
+    }
+
+    unsafe fn destroy(&mut self) {
+        // 序列化销毁：防止多个请求同时调用 Destroy 导致 cronet.dll 内部竞态崩溃
+        let _destroy_guard = self.destroy_mutex.as_ref().and_then(|m| m.lock().ok());
+
+        if let Some(ref pending) = self.pending_requests {
+            pending.remove(self.ptr);
+            verbose_log!("[DEBUG] CronetRequest teardown - Removed from pending list");
+        }
+
+        if !self.callback_ptr.is_null() {
+            Cronet_UrlRequestCallback_SetClientContext(self.callback_ptr, std::ptr::null_mut());
+        }
+        if !self.executor_ptr.is_null() {
+            Cronet_Executor_SetClientContext(self.executor_ptr, std::ptr::null_mut());
+        }
+        if let Some(dp) = self.upload_data_provider_ptr {
+            Cronet_UploadDataProvider_SetClientContext(dp, std::ptr::null_mut());
+        }
+
+        // completed == true，可以安全销毁（SEH 保护，防止崩溃）
+        seh_destroy!(self.ptr, Cronet_UrlRequest_Destroy, "UrlRequest_Destroy");
+        seh_destroy!(
+            self.callback_ptr,
+            Cronet_UrlRequestCallback_Destroy,
+            "Callback_Destroy"
+        );
+        seh_destroy!(
+            self.executor_ptr,
+            Cronet_Executor_Destroy,
+            "Executor_Destroy"
+        );
+        if !self.request_context_ptr.is_null() {
+            let _ = Box::from_raw(self.request_context_ptr);
+            self.request_context_ptr = std::ptr::null_mut();
+        }
+        // 释放 ExecutorContext
+        if !self.executor_context_ptr.is_null() {
+            let _ = Box::from_raw(self.executor_context_ptr);
+            self.executor_context_ptr = std::ptr::null_mut();
+        }
+        if let Some(dp) = self.upload_data_provider_ptr.take() {
+            seh_destroy!(
+                dp,
+                Cronet_UploadDataProvider_Destroy,
+                "UploadDataProvider_Destroy"
+            );
+        }
+        if !self.upload_context_ptr.is_null() {
+            let _ = Box::from_raw(self.upload_context_ptr);
+            self.upload_context_ptr = std::ptr::null_mut();
+        }
+        // Finally destroy engine if we own it
+        if let Some(engine_ptr) = self.owned_engine_ptr.take() {
+            seh_shutdown!(engine_ptr);
+            seh_destroy!(engine_ptr, Cronet_Engine_Destroy, "Engine_Destroy");
+        }
+    }
+}
+
+/// 已关闭的会话留下的 engine，等待它上面的请求全部结束后销毁
+struct SessionTeardown {
+    id: String,
+    engine_ptr: Cronet_EnginePtr,
+    active_requests: Arc<AtomicUsize>,
+    live_requests: Arc<AtomicUsize>,
+    in_flight_executors: Arc<AtomicUsize>,
+    pending_requests: Arc<PendingRequests>,
+    stage: SessionTeardownStage,
+}
+
+unsafe impl Send for SessionTeardown {}
+
+enum SessionTeardownStage {
+    Start,
+    /// 已取消进行中的请求，等待它们的回调
+    WaitCancelled {
+        deadline: Instant,
+    },
+    /// 请求已全部取消，额外等待一小段时间
+    CancelSettle {
+        until: Instant,
+    },
+    /// 等待 CronetRequest 句柄全部销毁
+    WaitHandles {
+        deadline: Instant,
+    },
+    /// 等待 executor 回调全部结束
+    WaitExecutors {
+        deadline: Instant,
+    },
+}
+
+impl SessionTeardown {
+    /// 推进销毁流程；engine 已销毁（或已放弃并泄漏）时返回 true
+    unsafe fn poll(&mut self, now: Instant) -> bool {
+        loop {
+            match self.stage {
+                SessionTeardownStage::Start => {
+                    let active = self.active_requests.load(Ordering::Acquire);
+                    verbose_log!(
+                        "[DEBUG] Session teardown - session {} active_requests={}",
+                        self.id,
+                        active
+                    );
+                    if active > 0 {
+                        // 主动取消所有进行中的请求
+                        for request_ptr in self.pending_requests.snapshot() {
+                            verbose_log!(
+                                "[DEBUG] Session teardown - Cancelling request {:?}",
+                                request_ptr
+                            );
+                            seh_call!(request_ptr, Cronet_UrlRequest_Cancel, "Session_Cancel");
+                        }
+                        self.stage = SessionTeardownStage::WaitCancelled {
+                            deadline: now + REQUEST_CANCEL_TIMEOUT,
+                        };
+                    } else {
+                        self.stage = SessionTeardownStage::WaitHandles {
+                            deadline: now + SESSION_HANDLE_TIMEOUT,
+                        };
+                    }
+                }
+                SessionTeardownStage::WaitCancelled { deadline } => {
+                    let active = self.active_requests.load(Ordering::Acquire);
+                    if active == 0 {
+                        // 额外等待，让 C++ 网络线程完成 MaybeReportMetrics 等内部清理
+                        self.stage = SessionTeardownStage::CancelSettle {
+                            until: now + SESSION_CANCEL_SETTLE,
+                        };
+                    } else if now < deadline {
+                        return false;
+                    } else {
+                        eprintln!("[WARN] Session teardown - Timeout waiting for {} active requests after cancellation, leaking engine to avoid crash", active);
+                        // 网络线程仍持有引用，不能销毁 Engine，否则会 use-after-free crash。
+                        // 泄漏 Engine 内存，但避免崩溃。
+                        return true;
+                    }
+                }
+                SessionTeardownStage::CancelSettle { until } => {
+                    if now < until {
+                        return false;
+                    }
+                    self.stage = SessionTeardownStage::WaitHandles {
+                        deadline: now + SESSION_HANDLE_TIMEOUT,
+                    };
+                }
+                SessionTeardownStage::WaitHandles { deadline } => {
+                    let live = self.live_requests.load(Ordering::Acquire);
+                    if live == 0 {
+                        self.stage = SessionTeardownStage::WaitExecutors {
+                            deadline: now + EXECUTOR_DRAIN_TIMEOUT,
+                        };
+                    } else if now < deadline {
+                        return false;
+                    } else {
+                        eprintln!("[WARN] Session teardown - {} CronetRequest handles still alive, leaking engine to avoid parent-before-child destroy", live);
+                        return true;
+                    }
+                }
+                SessionTeardownStage::WaitExecutors { deadline } => {
+                    let in_flight = self.in_flight_executors.load(Ordering::Acquire);
+                    if in_flight > 0 {
+                        if now < deadline {
+                            return false;
+                        }
+                        eprintln!(
+                            "[WARN] Session teardown - leaking engine because {} executor callbacks are still running",
+                            in_flight
+                        );
+                        return true;
+                    }
+
+                    // 所有请求已完成，安全销毁 engine（SEH 保护）
+                    verbose_log!("[DEBUG] Session teardown - Calling Cronet_Engine_Shutdown");
+                    seh_shutdown!(self.engine_ptr);
+
+                    verbose_log!("[DEBUG] Session teardown - Calling Cronet_Engine_Destroy");
+                    seh_destroy!(
+                        self.engine_ptr,
+                        Cronet_Engine_Destroy,
+                        "Session_Engine_Destroy"
+                    );
+                    verbose_log!(
+                        "[DEBUG] Session teardown - Engine destroyed for session {}",
+                        self.id
+                    );
+                    return true;
+                }
             }
         }
     }
+}
+
+enum TeardownJob {
+    Request(RequestTeardown),
+    Session(SessionTeardown),
+    /// 待销毁对象全部处理完后通知发送方
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+#[derive(Default)]
+struct TeardownQueue {
+    requests: Vec<RequestTeardown>,
+    // 已销毁的请求，到时间后递减所属 engine 的 live_requests（按时间先后排列）
+    settling: VecDeque<(Instant, Arc<AtomicUsize>)>,
+    sessions: Vec<SessionTeardown>,
+    flush_waiters: Vec<std::sync::mpsc::Sender<()>>,
+}
+
+impl TeardownQueue {
+    fn push(&mut self, job: TeardownJob) {
+        match job {
+            TeardownJob::Request(request) => self.requests.push(request),
+            TeardownJob::Session(session) => self.sessions.push(session),
+            TeardownJob::Flush(waiter) => self.flush_waiters.push(waiter),
+        }
+    }
+
+    fn is_idle(&self) -> bool {
+        self.requests.is_empty() && self.settling.is_empty() && self.sessions.is_empty()
+    }
+
+    fn tick(&mut self, now: Instant) {
+        let settling = &mut self.settling;
+        self.requests
+            .retain_mut(|request| unsafe { !request.poll(now, settling) });
+
+        while let Some((release_at, _)) = self.settling.front() {
+            if *release_at > now {
+                break;
+            }
+            if let Some((_, counter)) = self.settling.pop_front() {
+                counter.fetch_sub(1, Ordering::Release);
+            }
+        }
+
+        // 请求先于会话处理：engine 只会在它的请求全部销毁之后才销毁
+        self.sessions
+            .retain_mut(|session| unsafe { !session.poll(now) });
+
+        if self.is_idle() {
+            for waiter in self.flush_waiters.drain(..) {
+                let _ = waiter.send(());
+            }
+        }
+    }
+}
+
+static TEARDOWN_TX: Mutex<Option<std::sync::mpsc::Sender<TeardownJob>>> = Mutex::new(None);
+static TEARDOWN_SPAWN_WARNED: AtomicBool = AtomicBool::new(false);
+
+fn teardown_thread(rx: std::sync::mpsc::Receiver<TeardownJob>) {
+    let mut queue = TeardownQueue::default();
+    loop {
+        if queue.is_idle() {
+            // 没有待销毁的对象时阻塞等待，不占用 CPU
+            match rx.recv() {
+                Ok(job) => queue.push(job),
+                Err(_) => return,
+            }
+        } else {
+            std::thread::sleep(TEARDOWN_TICK);
+        }
+        while let Ok(job) = rx.try_recv() {
+            queue.push(job);
+        }
+        queue.tick(Instant::now());
+    }
+}
+
+/// 后台线程不可用时的退路：在当前线程上跑完同样的销毁流程（会阻塞调用方）
+fn run_teardown_inline(job: TeardownJob) {
+    let mut queue = TeardownQueue::default();
+    queue.push(job);
+    loop {
+        queue.tick(Instant::now());
+        if queue.is_idle() {
+            return;
+        }
+        std::thread::sleep(TEARDOWN_TICK);
+    }
+}
+
+fn submit_teardown(job: TeardownJob) {
+    let rejected = {
+        let mut slot = match TEARDOWN_TX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if slot.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            match std::thread::Builder::new()
+                .name("cycronet-teardown".to_string())
+                .spawn(move || teardown_thread(rx))
+            {
+                Ok(_) => *slot = Some(tx),
+                Err(e) => {
+                    if !TEARDOWN_SPAWN_WARNED.swap(true, Ordering::AcqRel) {
+                        eprintln!(
+                            "[WARN] Failed to start cycronet teardown thread ({}), tearing down inline",
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        let rejected = match slot.as_ref() {
+            Some(tx) => tx.send(job).err().map(|e| e.0),
+            None => Some(job),
+        };
+        if rejected.is_some() {
+            // 后台线程已退出；下次提交时重新创建
+            *slot = None;
+        }
+        rejected
+    };
+
+    if let Some(job) = rejected {
+        run_teardown_inline(job);
+    }
+}
+
+/// 等待后台线程把已提交的请求和会话全部销毁完。
+/// 超时仍未完成时返回 false。
+pub fn flush_deferred_teardown(timeout: Duration) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let slot = match TEARDOWN_TX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match slot.as_ref() {
+            Some(sender) => {
+                if sender.send(TeardownJob::Flush(tx)).is_err() {
+                    return true;
+                }
+            }
+            // 后台线程从未启动：没有任何待销毁的对象
+            None => return true,
+        }
+    }
+    rx.recv_timeout(timeout).is_ok()
 }
 
 // Context passed to C callbacks
@@ -1402,22 +1784,23 @@ unsafe fn complete_request(
                 let status_code = context.status_code.load(Ordering::Acquire);
 
                 let headers = match context.response_headers.lock() {
-                    Ok(guard) => guard.clone(),
+                    Ok(mut guard) => std::mem::take(&mut *guard),
                     Err(poisoned) => {
                         eprintln!(
                             "[WARN] complete_request: response_headers mutex poisoned, recovering"
                         );
-                        poisoned.into_inner().clone()
+                        std::mem::take(&mut *poisoned.into_inner())
                     }
                 };
 
+                // 取走而不是复制：RequestContext 要到延迟销毁时才释放，不能让它再留一份 body
                 let body = match context.response_buffer.lock() {
-                    Ok(guard) => guard.clone(),
+                    Ok(mut guard) => std::mem::take(&mut *guard),
                     Err(poisoned) => {
                         eprintln!(
                             "[WARN] complete_request: response_buffer mutex poisoned, recovering"
                         );
-                        poisoned.into_inner().clone()
+                        std::mem::take(&mut *poisoned.into_inner())
                     }
                 };
 
@@ -1553,81 +1936,20 @@ impl Drop for Session {
         // 标记 session 已关闭
         self.is_closed.store(true, Ordering::Release);
 
-        unsafe {
-            if !self.engine_ptr.is_null() {
-                let active = self.active_requests.load(Ordering::Acquire);
-                verbose_log!("[DEBUG] Session::drop - active_requests={}", active);
-
-                if active > 0 {
-                    // 主动取消所有进行中的请求
-                    verbose_log!(
-                        "[DEBUG] Session::drop - Cancelling {} active requests",
-                        active
-                    );
-                    let requests_to_cancel = self.pending_requests.snapshot();
-                    for request_ptr in requests_to_cancel {
-                        verbose_log!(
-                            "[DEBUG] Session::drop - Cancelling request {:?}",
-                            request_ptr
-                        );
-                        seh_call!(request_ptr, Cronet_UrlRequest_Cancel, "Session_Cancel");
-                    }
-
-                    // 等待请求完成取消（最多5秒）
-                    let start = std::time::Instant::now();
-                    while self.active_requests.load(Ordering::Acquire) > 0 {
-                        if start.elapsed() > std::time::Duration::from_secs(5) {
-                            eprintln!("[WARN] Session::drop - Timeout waiting for {} active requests after cancellation, leaking engine to avoid crash",
-                                self.active_requests.load(Ordering::Acquire));
-                            // 网络线程仍持有引用，不能销毁 Engine，否则会 use-after-free crash。
-                            // 泄漏 Engine 内存，但避免崩溃。
-                            self.engine_ptr = std::ptr::null_mut();
-                            return;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-
-                    // 额外等待，让 C++ 网络线程完成 MaybeReportMetrics 等内部清理
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-
-                let start = std::time::Instant::now();
-                while self.live_requests.load(Ordering::Acquire) > 0 {
-                    if start.elapsed() > std::time::Duration::from_secs(2) {
-                        eprintln!("[WARN] Session::drop - {} CronetRequest handles still alive, leaking engine to avoid parent-before-child destroy",
-                            self.live_requests.load(Ordering::Acquire));
-                        self.engine_ptr = std::ptr::null_mut();
-                        return;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-
-                if !wait_counter_zero(
-                    &self.in_flight_executors,
-                    std::time::Duration::from_secs(2),
-                    "session executor callbacks",
-                ) {
-                    eprintln!(
-                        "[WARN] Session::drop - leaking engine because executor callbacks are still running"
-                    );
-                    self.engine_ptr = std::ptr::null_mut();
-                    return;
-                }
-
-                // 所有请求已完成，安全销毁 engine（SEH 保护）
-                verbose_log!("[DEBUG] Session::drop - Calling Cronet_Engine_Shutdown");
-                seh_shutdown!(self.engine_ptr);
-
-                verbose_log!("[DEBUG] Session::drop - Calling Cronet_Engine_Destroy");
-                seh_destroy!(
-                    self.engine_ptr,
-                    Cronet_Engine_Destroy,
-                    "Session_Engine_Destroy"
-                );
-                verbose_log!("[DEBUG] Session::drop - Engine destroyed");
-            }
+        if self.engine_ptr.is_null() {
+            return;
         }
-        verbose_log!("[DEBUG] Session::drop - Finished for session {}", self.id);
+
+        // 取消进行中的请求、等待它们结束、销毁 engine 都在后台线程进行，不阻塞调用方
+        submit_teardown(TeardownJob::Session(SessionTeardown {
+            id: std::mem::take(&mut self.id),
+            engine_ptr: std::mem::replace(&mut self.engine_ptr, std::ptr::null_mut()),
+            active_requests: self.active_requests.clone(),
+            live_requests: self.live_requests.clone(),
+            in_flight_executors: self.in_flight_executors.clone(),
+            pending_requests: self.pending_requests.clone(),
+            stage: SessionTeardownStage::Start,
+        }));
     }
 }
 
