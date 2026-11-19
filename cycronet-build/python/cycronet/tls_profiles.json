@@ -1,5 +1,240 @@
 {
-  "chrome_152": {
+   "chrome_157": {
+    "version": "Chrome 157",
+    "cipher_suites": [
+      "TLS_GREASE",
+      "TLS_AES_128_GCM_SHA256",
+      "TLS_AES_256_GCM_SHA384",
+      "TLS_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_RSA_WITH_AES_256_CBC_SHA"
+    ],
+    "tls_curves": [
+      "X25519MLKEM768",
+      "X25519",
+      "P-256",
+      "P-384"
+    ],
+    "tls_extensions": [
+      "trust_anchors:sorted:82df130201,82df130206,82df13020d,82df13020e,82df13020f,82df130212,82df130213,82df130214,839a648c9b2d0107,839a648c9b2d0108,839a648c9b2d0109,839a648c9b2d010a,839a648c9b2d010b,839a648c9b2d010c,839a648c9b2d010d,839a648c9b2d0112,839a648c9b2d0113,d6790901,d6790904,d6790905,d6790906,d6790907,d6790908,d679090a,d679090b,d679090c,d679090d,d679090f"
+    ],
+    "signature_algorithms": [
+      "0x0a0a",
+      "0x0904",
+      "0x0905",
+      "0x0906",
+      "ecdsa_secp256r1_sha256",
+      "rsa_pss_rsae_sha256",
+      "rsa_pkcs1_sha256",
+      "0x0503",
+      "rsa_pss_rsae_sha384",
+      "rsa_pkcs1_sha384",
+      "rsa_pss_rsae_sha512",
+      "0x0601"
+    ],
+    "hex_codes": [
+
+    ]
+  },
+   "chrome_156": {
+    "version": "Chrome 156",
+    "cipher_suites": [
+      "TLS_GREASE",
+      "TLS_AES_128_GCM_SHA256",
+      "TLS_AES_256_GCM_SHA384",
+      "TLS_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_RSA_WITH_AES_256_CBC_SHA"
+    ],
+    "tls_curves": [
+      "X25519MLKEM768",
+      "X25519",
+      "P-256",
+      "P-384"
+    ],
+    "tls_extensions": [
+      "trust_anchors:sorted:82df130201,82df130206,82df13020d,82df13020e,82df13020f,82df130212,82df130213,82df130214,839a648c9b2d0107,839a648c9b2d0108,839a648c9b2d0109,839a648c9b2d010a,839a648c9b2d010b,839a648c9b2d010c,839a648c9b2d010d,839a648c9b2d0112,839a648c9b2d0113,d6790901,d6790904,d6790905,d6790906,d6790907,d6790908,d679090a,d679090b,d679090c,d679090d,d679090f"
+    ],
+    "signature_algorithms": [
+      "0x0a0a",
+      "0x0904",
+      "0x0905",
+      "0x0906",
+      "ecdsa_secp256r1_sha256",
+      "rsa_pss_rsae_sha256",
+      "rsa_pkcs1_sha256",
+      "0x0503",
+      "rsa_pss_rsae_sha384",
+      "rsa_pkcs1_sha384",
+      "rsa_pss_rsae_sha512",
+      "0x0601"
+    ],
+    "hex_codes": [
+
+    ]
+  },
+   "chrome_155": {
+    "version": "Chrome 155",
+    "cipher_suites": [
+      "TLS_GREASE",
+      "TLS_AES_128_GCM_SHA256",
+      "TLS_AES_256_GCM_SHA384",
+      "TLS_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_RSA_WITH_AES_256_CBC_SHA"
+    ],
+    "tls_curves": [
+      "X25519MLKEM768",
+      "X25519",
+      "P-256",
+      "P-384"
+    ],
+    "tls_extensions": [
+      "trust_anchors:sorted:82df130201,82df130206,82df13020d,82df13020e,82df13020f,82df130212,82df130213,82df130214,839a648c9b2d0107,839a648c9b2d0108,839a648c9b2d0109,839a648c9b2d010a,839a648c9b2d010b,839a648c9b2d010c,839a648c9b2d010d,839a648c9b2d0112,839a648c9b2d0113,d6790901,d6790904,d6790905,d6790906,d6790907,d6790908,d679090a,d679090b,d679090c,d679090d,d679090f"
+    ],
+    "signature_algorithms": [
+      "0x0a0a",
+      "0x0904",
+      "0x0905",
+      "0x0906",
+      "ecdsa_secp256r1_sha256",
+      "rsa_pss_rsae_sha256",
+      "rsa_pkcs1_sha256",
+      "0x0503",
+      "rsa_pss_rsae_sha384",
+      "rsa_pkcs1_sha384",
+      "rsa_pss_rsae_sha512",
+      "0x0601"
+    ],
+    "hex_codes": [
+
+    ]
+  },
+   "chrome_154": {
+    "version": "Chrome 154",
+    "cipher_suites": [
+      "TLS_GREASE",
+      "TLS_AES_128_GCM_SHA256",
+      "TLS_AES_256_GCM_SHA384",
+      "TLS_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_RSA_WITH_AES_256_CBC_SHA"
+    ],
+    "tls_curves": [
+      "X25519MLKEM768",
+      "X25519",
+      "P-256",
+      "P-384"
+    ],
+    "tls_extensions": [
+      "trust_anchors:sorted:82df130201,82df130206,82df13020d,82df13020e,82df13020f,82df130212,82df130213,82df130214,839a648c9b2d0107,839a648c9b2d0108,839a648c9b2d0109,839a648c9b2d010a,839a648c9b2d010b,839a648c9b2d010c,839a648c9b2d010d,839a648c9b2d0112,839a648c9b2d0113,d6790901,d6790904,d6790905,d6790906,d6790907,d6790908,d679090a,d679090b,d679090c,d679090d,d679090f"
+    ],
+    "signature_algorithms": [
+      "0x0a0a",
+      "0x0904",
+      "0x0905",
+      "0x0906",
+      "ecdsa_secp256r1_sha256",
+      "rsa_pss_rsae_sha256",
+      "rsa_pkcs1_sha256",
+      "0x0503",
+      "rsa_pss_rsae_sha384",
+      "rsa_pkcs1_sha384",
+      "rsa_pss_rsae_sha512",
+      "0x0601"
+    ],
+    "hex_codes": [
+
+    ]
+  },
+   "chrome_153": {
+    "version": "Chrome 153",
+    "cipher_suites": [
+      "TLS_GREASE",
+      "TLS_AES_128_GCM_SHA256",
+      "TLS_AES_256_GCM_SHA384",
+      "TLS_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_RSA_WITH_AES_256_CBC_SHA"
+    ],
+    "tls_curves": [
+      "X25519MLKEM768",
+      "X25519",
+      "P-256",
+      "P-384"
+    ],
+    "tls_extensions": [
+      "trust_anchors:shuffle:82df130201,82df130206,82df13020d,82df13020e,82df13020f,82df130212,82df130213,82df130214,839a648c9b2d0107,839a648c9b2d0108,839a648c9b2d0109,839a648c9b2d010a,839a648c9b2d010b,839a648c9b2d010c,839a648c9b2d010d,839a648c9b2d0112,839a648c9b2d0113,d6790901,d6790904,d6790905,d6790906,d6790907,d6790908,d679090a,d679090b,d679090c,d679090d,d679090f"
+    ],
+    "signature_algorithms": [
+      "0x0a0a",
+      "0x0904",
+      "0x0905",
+      "0x0906",
+      "ecdsa_secp256r1_sha256",
+      "rsa_pss_rsae_sha256",
+      "rsa_pkcs1_sha256",
+      "0x0503",
+      "rsa_pss_rsae_sha384",
+      "rsa_pkcs1_sha384",
+      "rsa_pss_rsae_sha512",
+      "0x0601"
+    ],
+    "hex_codes": [
+
+    ]
+  },
+   "chrome_152": {
     "version": "Chrome 152",
     "cipher_suites": [
       "TLS_GREASE",
@@ -26,7 +261,7 @@
       "P-384"
     ],
     "tls_extensions": [
-      "trust_anchors"
+      "trust_anchors:shuffle:82df130201,82df130206,82df13020d,82df13020e,82df13020f,82df130212,82df130213,82df130214,839a648c9b2d0107,839a648c9b2d0108,839a648c9b2d0109,839a648c9b2d010a,839a648c9b2d010b,839a648c9b2d010c,839a648c9b2d010d,839a648c9b2d0112,839a648c9b2d0113,d6790901,d6790904,d6790905,d6790906,d6790907,d6790908,d679090a,d679090b,d679090c,d679090d,d679090f"
     ],
     "signature_algorithms": [
       "0x0a0a",
@@ -42,9 +277,11 @@
       "rsa_pss_rsae_sha512",
       "0x0601"
     ],
-    "hex_codes": []
+    "hex_codes": [
+
+    ]
   },
-  "chrome_150": {
+   "chrome_150": {
     "version": "Chrome 150",
     "cipher_suites": [
       "TLS_GREASE",
@@ -70,7 +307,8 @@
       "P-256",
       "P-384"
     ],
-    "tls_extensions": [],
+    "tls_extensions": [
+    ],
     "signature_algorithms": [
       "0x0904",
       "0x0905",
@@ -84,9 +322,11 @@
       "rsa_pss_rsae_sha512",
       "0x0601"
     ],
-    "hex_codes": []
+    "hex_codes": [
+
+    ]
   },
-  "chrome_144": {
+   "chrome_144": {
     "version": "Chrome 144",
     "cipher_suites": [
       "TLS_GREASE",
@@ -112,10 +352,13 @@
       "P-256",
       "P-384"
     ],
-    "tls_extensions": [],
-    "hex_codes": []
+    "tls_extensions": [
+    ],
+    "hex_codes": [
+
+    ]
   },
-  "chrome_145": {
+   "chrome_145": {
     "version": "Chrome 144",
     "cipher_suites": [
       "TLS_GREASE",
@@ -141,10 +384,13 @@
       "P-256",
       "P-384"
     ],
-    "tls_extensions": [],
-    "hex_codes": []
+    "tls_extensions": [
+    ],
+    "hex_codes": [
+
+    ]
   },
-  "chrome_146": {
+   "chrome_146": {
     "version": "Chrome 144",
     "cipher_suites": [
       "TLS_GREASE",
@@ -170,10 +416,13 @@
       "P-256",
       "P-384"
     ],
-    "tls_extensions": [],
-    "hex_codes": []
+    "tls_extensions": [
+    ],
+    "hex_codes": [
+
+    ]
   },
-  "chrome_147": {
+   "chrome_147": {
     "version": "Chrome 144",
     "cipher_suites": [
       "TLS_GREASE",
@@ -199,8 +448,11 @@
       "P-256",
       "P-384"
     ],
-    "tls_extensions": [],
-    "hex_codes": []
+    "tls_extensions": [
+    ],
+    "hex_codes": [
+
+    ]
   },
   "chrome_133": {
     "version": "Chrome 133",
@@ -229,9 +481,11 @@
       "P-384"
     ],
     "tls_extensions": [
-      "application_settings_old"
+       "application_settings_old"
     ],
-    "hex_codes": []
+    "hex_codes": [
+
+    ]
   },
   "chrome_126": {
     "version": "Chrome 126",
@@ -262,7 +516,9 @@
     "tls_extensions": [
       "application_settings_old"
     ],
-    "hex_codes": []
+    "hex_codes": [
+
+    ]
   },
   "chrome_test": {
     "version": "Chrome test",
@@ -279,7 +535,10 @@
       "P-256",
       "P-384"
     ],
-    "tls_extensions": [],
-    "hex_codes": []
+    "tls_extensions": [
+    ],
+    "hex_codes": [
+
+    ]
   }
 }
