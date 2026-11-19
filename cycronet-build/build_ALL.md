@@ -42,7 +42,7 @@ Remove-Item python\cycronet\*.so -ErrorAction SilentlyContinue
 Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
 
 # 3. 复制 Windows x64 DLL
-Copy-Item cronet-libs\windows\cronet.144.0.7506.0.dll python\cycronet\ -Force
+# build.rs 会把 cronet-bin\cronet.dll 自动复制到 python\cycronet\，不需要手动复制
 
 # 4. 构建 wheel
 maturin build --release
@@ -110,7 +110,7 @@ Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
 
 # 3. 复制 Linux SO 和 NSS 依赖库
 Copy-Item cronet-libs\linux\libcronet.144.0.7506.0.so python\cycronet\ -Force
-Copy-Item linux_deps\*.so python\cycronet\ -Force
+Copy-Item linux_deps\* python\cycronet\ -Force
 
 # 4. 使用 Docker 构建 manylinux_2_24 wheel（支持 GLIBC 2.24+）
 # 推荐：自动打包所有依赖，最大兼容性
@@ -220,7 +220,7 @@ function Build-Windows {
     cd $ProjectDir
     Remove-Item python\cycronet\*.so -ErrorAction SilentlyContinue
     Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
-    Copy-Item cronet-libs\windows\cronet.144.0.7506.0.dll python\cycronet\ -Force
+    # build.rs 会把 cronet-bin\cronet.dll 自动复制到 python\cycronet\，不需要手动复制
     maturin build --release
 }
 
@@ -249,7 +249,7 @@ function Build-Linux {
 
     # 复制 libcronet.so 和 NSS 依赖库
     Copy-Item cronet-libs\linux\libcronet.144.0.7506.0.so python\cycronet\ -Force
-    Copy-Item linux_deps\*.so python\cycronet\ -Force
+    Copy-Item linux_deps\* python\cycronet\ -Force
 
     $mountPath = $ProjectDir -replace '\\', '/'
     docker run --rm `

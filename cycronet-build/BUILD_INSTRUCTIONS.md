@@ -114,7 +114,7 @@ Remove-Item python\cycronet\*.so -ErrorAction SilentlyContinue
 Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
 
 # 复制 Windows DLL
-Copy-Item cronet-libs\windows\cronet.144.0.7506.0.dll python\cycronet\ -Force
+# build.rs 会把 cronet-bin\cronet.dll 自动复制到 python\cycronet\，不需要手动复制
 
 # 编译
 maturin build --release
@@ -129,7 +129,7 @@ Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
 
 # 复制 Linux SO 和 NSS 依赖
 Copy-Item cronet-libs\linux\libcronet.144.0.7506.0.so python\cycronet\ -Force
-Copy-Item linux_deps\*.so python\cycronet\ -Force
+Copy-Item linux_deps\* python\cycronet\ -Force
 
 # 使用 Docker 编译
 docker run --rm `

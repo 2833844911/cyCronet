@@ -17,7 +17,7 @@ function Build-Windows {
     Remove-Item python\cycronet\*.dylib -ErrorAction SilentlyContinue
 
     Write-Host "复制 Windows x64 DLL..." -ForegroundColor Yellow
-    Copy-Item cronet-libs\windows\cronet.144.0.7506.0.dll python\cycronet\ -Force
+    # build.rs 会把 cronet-bin\cronet.dll 自动复制到 python\cycronet\，不需要手动复制
 
     Write-Host "开始构建..." -ForegroundColor Green
     maturin build --release

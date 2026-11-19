@@ -10,6 +10,12 @@ cycronet-build/python/cycronet/__pycache__/
 cycronet-build/python/cycronet/*.pyc
 cycronet-build/python/cycronet/libcronet.*.dylib
 cycronet-build/python/cycronet/libcronet.*.so.pkg
+# build.rs 和打包脚本会把原生库放进 python/cycronet，它们不是源码
+cycronet-build/python/cycronet/*.so
+cycronet-build/python/cycronet/*.so.*
+cycronet-build/python/cycronet/*.dll
+cycronet-build/python/cycronet/*.pyd
+cycronet-build/python/cycronet/*.dylib
 
 cycronet-build/export_150_1_0_tls_signature.zip
 cycronet-build/export_150_1_0_tls_signature/.DS_Store
