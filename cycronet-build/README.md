@@ -43,9 +43,9 @@ Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大
 
 Cycronet 直接使用 Chromium 的 Cronet 网络库，产生的所有网络特征与真实 Chrome 浏览器**完全一致**，无法被检测出是爬虫。
 
-## 🚀 cyCronet 152.0.1 快速使用
+## 🚀 cyCronet 157.0.2 快速使用
 
-当前本地构建版本是 `152.0.1`，默认 TLS profile 是 `chrome_152`。正常使用时不需要手动传 `chrometls`，它会自动读取包内 `python/cycronet/tls_profiles.json` 的 `chrome_152` 配置。
+当前版本是 `157.0.2`，默认 TLS profile 是 `chrome_157`。正常使用时不需要手动传 `chrometls`，它会自动读取包内 `python/cycronet/tls_profiles.json` 的 `chrome_157` 配置。
 
 ### 安装本地编译好的 wheel
 
@@ -66,12 +66,12 @@ print(data["http2"]["akamai_fingerprint"])
 print(data["http2"]["akamai_fingerprint_hash"])
 ```
 
-### 显式指定 chrome_152
+### 显式指定 chrome_157
 
 ```python
 import cycronet
 
-with cycronet.CronetClient(verify=False, chrometls="chrome_152") as session:
+with cycronet.CronetClient(verify=False, chrometls="chrome_157") as session:
     response = session.get("https://tls.peet.ws/api/all")
     print(response.json()["http2"]["akamai_fingerprint"])
 ```
@@ -85,7 +85,7 @@ response = cycronet.get("https://tls.tsvmp.com:38080/cbbiyhh", verify=False)
 print(response.text)
 ```
 
-如果页面里 `name: signature_algorithms (13)` 下方顺序如下，说明 `chrome_152` 配置已经生效
+如果页面里 `name: signature_algorithms (13)` 下方顺序如下，说明 `chrome_157` 配置已经生效
 （`chrome_150` 除了没有开头的 GREASE 值 `Unknown(0x0a0a)` 之外，其余顺序相同）：
 
 ```text
@@ -215,7 +215,9 @@ session = cycronet.CronetClient(
 ```
 
 **支持的 TLS 配置：**
-- `chrome_152`: Chrome 152 版本的 TLS 指纹（默认，带 `trust_anchors` 扩展和 GREASE signature algorithm）
+- `chrome_157`: Chrome 157 版本的 TLS 指纹（默认，带 `trust_anchors` 扩展和 GREASE signature algorithm；`trust_anchors` 按字节排序，每次连接相同）
+- `chrome_156` / `chrome_155` / `chrome_154`: 对应 Chrome 156 / 155 / 154，`trust_anchors` 处理方式同 `chrome_157`
+- `chrome_153` / `chrome_152`: 对应 Chrome 153 / 152，`trust_anchors` 每次连接顺序随机
 - `chrome_150`: Chrome 150 版本的 TLS 指纹
 - `chrome_144` / `chrome_145` / `chrome_146` / `chrome_147` / `chrome_133` / `chrome_126`: 用于回退或对比测试
 
